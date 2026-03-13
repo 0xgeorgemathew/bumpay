@@ -451,7 +451,7 @@ export default function EnsOnboardingScreen() {
                         placeholderTextColor={COLORS.textMuted}
                         value={usernameInput}
                         onChangeText={(value) => {
-                          setUsernameInput(value.toLowerCase().replace(/\.(eth|grid\.eth)$/i, ""));
+                          setUsernameInput(normalizeEnsLabel(value));
                           setError(null);
                           if (claimStatus === "available" || claimStatus === "taken") {
                             setClaimStatus("idle");

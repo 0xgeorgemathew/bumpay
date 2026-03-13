@@ -471,7 +471,7 @@ export function EnsPreferencesCard({
                   label={`Username.${ENS_PARENT_DOMAIN}`}
                   value={usernameInput}
                   onChangeText={(value) => {
-                    setUsernameInput(value.toLowerCase().replace(/\.(eth|grid\.eth)$/i, ""));
+                    setUsernameInput(normalizeEnsLabel(value));
                     setClaimError(null);
                   }}
                   autoCapitalize="none"
