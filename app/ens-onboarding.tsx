@@ -45,7 +45,7 @@ import { useOperationalWallet } from "../lib/wallet";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
-type Step = "welcome" | "claim" | "preferences" | "success";
+type Step = "welcome" | "claim" | "mode" | "token" | "sync" | "success";
 type ClaimStatus = "idle" | "checking" | "available" | "taken" | "claiming" | "error";
 type ProfileSyncStatus = "idle" | "saving" | "error";
 
@@ -98,7 +98,7 @@ export default function EnsOnboardingScreen() {
     }
 
     if (walletStatus === "creating_smart") {
-      return "Smart wallet is still provisioning. ENS writes are temporarily blocked.";
+      return "Smart wallet is still provisioning. Profile setup is temporarily blocked.";
     }
 
     return walletError || "No wallet connected";
@@ -127,7 +127,7 @@ export default function EnsOnboardingScreen() {
               return;
             }
 
-            setCurrentStep("preferences");
+            setCurrentStep("mode");
             return;
           }
 
@@ -302,15 +302,11 @@ export default function EnsOnboardingScreen() {
         ensName: fullName,
       });
 
-      setCurrentStep("preferences");
+      setCurrentStep("mode");
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (claimError) {
       setClaimStatus("error");
-      setError(
-        claimError instanceof Error
-          ? claimError.message
-          : "Failed to claim username. Please try again.",
-      );
+      setError("Couldn't claim that name. Please try again.");
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
   }, [
@@ -351,6 +347,11 @@ export default function EnsOnboardingScreen() {
     setError(null);
   }, [setDraft]);
 
+  const handleContinueToToken = useCallback(async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    setCurrentStep("token");
+  }, []);
+
   const updateSettlementToken = useCallback((value: string) => {
     setDraft((current) => ({
       ...current,
@@ -369,6 +370,11 @@ export default function EnsOnboardingScreen() {
     setProfileSyncStatus("idle");
     setError(null);
   }, [setDraft]);
+
+  const handleContinueToSync = useCallback(async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    setCurrentStep("sync");
+  }, []);
 
   const handleSaveProfile = useCallback(async () => {
     if (!draft.ensName || !walletClient) {
@@ -415,11 +421,7 @@ export default function EnsOnboardingScreen() {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (syncError) {
       setProfileSyncStatus("error");
-      setError(
-        syncError instanceof Error
-          ? syncError.message
-          : "Failed to sync ENS profile. Please try again.",
-      );
+      setError("Couldn't save your profile. Please try again.");
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
   }, [draft, setDraft, smartWalletAddress, waitForProfileSync, walletBlockedMessage, walletClient]);
@@ -431,6 +433,15 @@ export default function EnsOnboardingScreen() {
 
   const isLoading = claimStatus === "checking" || claimStatus === "claiming";
   const googleAvatar = getGoogleAvatar();
+  const selectedTokenOption = useMemo(
+    () =>
+      P2P_TOKEN_OPTIONS.find(
+        (option) =>
+          option.value.toLowerCase() ===
+          (draft.defaultAsset?.token ?? P2P_TOKEN_OPTIONS[0]?.value ?? "").toLowerCase(),
+      ) ?? P2P_TOKEN_OPTIONS[0],
+    [draft.defaultAsset?.token],
+  );
 
   const floatTranslateY = floatAnim.interpolate({
     inputRange: [0, 1],
@@ -542,7 +553,7 @@ export default function EnsOnboardingScreen() {
                   <View style={styles.featureContent}>
                     <Text style={styles.featureTitle}>CLAIM YOUR NAME</Text>
                     <Text style={styles.featureDescription}>
-                      Get a unique ENS username before entering the app. Others can send you money using just your name.
+                      Claim your Bump name before entering the app. Other people can pay you using just your name.
                     </Text>
                   </View>
                 </View>
@@ -597,7 +608,7 @@ export default function EnsOnboardingScreen() {
                 </View>
                 <Text style={styles.claimTitle}>Choose Your Username</Text>
                 <Text style={styles.claimSubtitle}>
-                  This will be your permanent payment address. Make it memorable!
+                  This will be your payment name inside Bump. Make it memorable.
                 </Text>
               </View>
 
@@ -711,114 +722,73 @@ export default function EnsOnboardingScreen() {
                     <Ionicons name="information-circle" size={12} color={COLORS.textInverted} />
                   </View>
                   <Text style={styles.infoText}>
-                    Your ENS name will automatically resolve to your wallet address.
+                    Your name will automatically point to your wallet address.
                   </Text>
                 </View>
               </View>
             </View>
           )}
 
-          {currentStep === "preferences" && (
+          {currentStep === "mode" && (
             <View style={styles.stepContainer}>
               <View style={styles.claimHeader}>
                 <View style={styles.claimIconShadow}>
                   <View style={[styles.claimIcon, styles.preferencesIcon]}>
-                    <Ionicons name="options" size={36} color={COLORS.textInverted} />
+                    <Ionicons name="person-circle" size={36} color={COLORS.textInverted} />
                   </View>
                 </View>
-                <Text style={styles.claimTitle}>Set Payment Preferences</Text>
+                <Text style={styles.claimTitle}>How Will You Use Bump?</Text>
                 <Text style={styles.claimSubtitle}>
-                  Choose your mode and settlement token, then sync your ENS profile before entering the app.
+                  Pick the profile that fits you best. You can change this later.
                 </Text>
               </View>
 
-              <View style={styles.inputCard}>
-                <Text style={styles.inputLabel}>MODE</Text>
-                <View style={styles.modeSelector}>
-                  {BUMP_MODE_OPTIONS.map((mode) => {
-                    const selected = draft.mode === mode;
-                    return (
-                      <Pressable
-                        key={mode}
-                        onPress={() => updateMode(mode)}
-                        style={[
-                          styles.preferenceOption,
-                          selected && styles.preferenceOptionSelected,
-                        ]}
-                      >
+              <View style={styles.slideOptions}>
+                {BUMP_MODE_OPTIONS.map((mode) => {
+                  const selected = draft.mode === mode;
+                  return (
+                    <Pressable
+                      key={mode}
+                      onPress={() => updateMode(mode)}
+                      style={[
+                        styles.slideOptionCard,
+                        selected && styles.slideOptionCardSelected,
+                      ]}
+                    >
+                      <View style={styles.slideOptionTopRow}>
                         <Text
                           style={[
-                            styles.preferenceOptionTitle,
-                            selected && styles.preferenceOptionTitleSelected,
-                          ]}
-                        >
-                          {mode.toUpperCase()}
-                        </Text>
-                        <Text
-                          style={[
-                            styles.preferenceOptionSubtitle,
-                            selected && styles.preferenceOptionSubtitleSelected,
+                            styles.slideOptionTitle,
+                            selected && styles.slideOptionTitleSelected,
                           ]}
                         >
                           {mode === "p2p"
-                            ? "Personal payments"
+                            ? "PERSONAL"
                             : mode === "merchant"
-                              ? "Merchant-only profile"
-                              : "P2P and merchant"}
+                              ? "STORE"
+                              : "BOTH"}
                         </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              </View>
-
-              <View style={styles.inputCard}>
-                <Text style={styles.inputLabel}>SETTLEMENT TOKEN</Text>
-                <View style={styles.tokenSelector}>
-                  {P2P_TOKEN_OPTIONS.map((option) => {
-                    const selected =
-                      draft.defaultAsset?.token?.toLowerCase() === option.value.toLowerCase();
-
-                    return (
-                      <Pressable
-                        key={option.value}
-                        onPress={() => updateSettlementToken(option.value)}
-                        style={[
-                          styles.tokenOption,
-                          selected && styles.tokenOptionSelected,
-                        ]}
-                      >
-                        <View>
-                          <Text
-                            style={[
-                              styles.tokenOptionTitle,
-                              selected && styles.tokenOptionTitleSelected,
-                            ]}
-                          >
-                            {option.label}
-                          </Text>
-                          <Text
-                            style={[
-                              styles.tokenOptionSubtitle,
-                              selected && styles.tokenOptionSubtitleSelected,
-                            ]}
-                          >
-                            {option.subtitle}
-                          </Text>
-                        </View>
                         {selected ? (
-                          <View style={styles.tokenOptionCheck}>
-                            <Ionicons
-                              name="checkmark"
-                              size={16}
-                              color={COLORS.textInverted}
-                            />
+                          <View style={styles.slideOptionBadge}>
+                            <Ionicons name="checkmark" size={14} color={COLORS.textInverted} />
                           </View>
                         ) : null}
-                      </Pressable>
-                    );
-                  })}
-                </View>
+                      </View>
+                      <Text
+                        style={[
+                          styles.slideOptionBody,
+                          selected && styles.slideOptionBodySelected,
+                        ]}
+                      >
+                        {mode === "p2p"
+                          ? "Great for sending and receiving money as a person."
+                          : mode === "merchant"
+                            ? "Best for accepting payments as a business or seller."
+                            : "Use one profile for both personal and merchant payments."}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
               </View>
 
               {error && (
@@ -827,6 +797,156 @@ export default function EnsOnboardingScreen() {
                   <Text style={styles.errorText}>{error}</Text>
                 </View>
               )}
+
+              <View style={styles.claimActions}>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.primaryButton,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  onPress={handleContinueToToken}
+                >
+                  <Ionicons name="arrow-forward" size={20} color={COLORS.textInverted} />
+                  <Text style={styles.primaryButtonText}>CONTINUE</Text>
+                </Pressable>
+              </View>
+
+              <View style={styles.infoSection}>
+                <View style={styles.infoItem}>
+                  <View style={styles.infoBullet}>
+                    <Ionicons name="information-circle" size={12} color={COLORS.textInverted} />
+                  </View>
+                  <Text style={styles.infoText}>
+                    This helps Bump know how to present your profile to other users.
+                  </Text>
+                </View>
+              </View>
+            </View>
+          )}
+
+          {currentStep === "token" && (
+            <View style={styles.stepContainer}>
+              <View style={styles.claimHeader}>
+                <View style={styles.claimIconShadow}>
+                  <View style={[styles.claimIcon, styles.tokenIcon]}>
+                    <Ionicons name="cash" size={36} color={COLORS.textInverted} />
+                  </View>
+                </View>
+                <Text style={styles.claimTitle}>What Do You Want To Receive?</Text>
+                <Text style={styles.claimSubtitle}>
+                  Choose the token people should send you by default.
+                </Text>
+              </View>
+
+              <View style={styles.slideOptions}>
+                {P2P_TOKEN_OPTIONS.map((option) => {
+                  const selected =
+                    draft.defaultAsset?.token?.toLowerCase() === option.value.toLowerCase();
+
+                  return (
+                    <Pressable
+                      key={option.value}
+                      onPress={() => updateSettlementToken(option.value)}
+                      style={[
+                        styles.slideOptionCard,
+                        selected && styles.slideOptionCardSelected,
+                      ]}
+                    >
+                      <View style={styles.slideOptionTopRow}>
+                        <Text
+                          style={[
+                            styles.slideOptionTitle,
+                            selected && styles.slideOptionTitleSelected,
+                          ]}
+                        >
+                          {option.label}
+                        </Text>
+                        {selected ? (
+                          <View style={styles.slideOptionBadge}>
+                            <Ionicons name="checkmark" size={14} color={COLORS.textInverted} />
+                          </View>
+                        ) : null}
+                      </View>
+                      <Text
+                        style={[
+                          styles.slideOptionBody,
+                          selected && styles.slideOptionBodySelected,
+                        ]}
+                      >
+                        {option.subtitle}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <View style={styles.claimActions}>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.primaryButton,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  onPress={handleContinueToSync}
+                >
+                  <Ionicons name="arrow-forward" size={20} color={COLORS.textInverted} />
+                  <Text style={styles.primaryButtonText}>CONTINUE</Text>
+                </Pressable>
+              </View>
+
+              <View style={styles.infoSection}>
+                <View style={styles.infoItem}>
+                  <View style={styles.infoBullet}>
+                    <Ionicons name="information-circle" size={12} color={COLORS.textInverted} />
+                  </View>
+                  <Text style={styles.infoText}>
+                    People can still choose a different token later if your app supports it.
+                  </Text>
+                </View>
+              </View>
+            </View>
+          )}
+
+          {currentStep === "sync" && (
+            <View style={styles.stepContainer}>
+              <View style={styles.claimHeader}>
+                <View style={styles.claimIconShadow}>
+                  <View style={[styles.claimIcon, styles.syncIcon]}>
+                    <Ionicons name="rocket" size={36} color={COLORS.textInverted} />
+                  </View>
+                </View>
+                <Text style={styles.claimTitle}>Finish Your Profile</Text>
+                <Text style={styles.claimSubtitle}>
+                  Save your name and payment preferences so you are ready to use Bump.
+                </Text>
+              </View>
+
+              <View style={styles.summaryCard}>
+                <Text style={styles.summaryLabel}>YOUR NAME</Text>
+                <Text style={styles.summaryValue}>{draft.ensName}</Text>
+
+                <View style={styles.summaryDivider} />
+
+                <Text style={styles.summaryLabel}>PROFILE TYPE</Text>
+                <Text style={styles.summaryValue}>
+                  {draft.mode === "p2p"
+                    ? "PERSONAL"
+                    : draft.mode === "merchant"
+                      ? "STORE"
+                      : "BOTH"}
+                </Text>
+
+                <View style={styles.summaryDivider} />
+
+                <Text style={styles.summaryLabel}>DEFAULT TOKEN</Text>
+                <Text style={styles.summaryValue}>{selectedTokenOption?.label ?? "USDC"}</Text>
+              </View>
+
+              {error ? (
+                <View style={styles.errorCard}>
+                  <Ionicons name="alert-circle" size={16} color={COLORS.textInverted} />
+                  <Text style={styles.errorText}>{error}</Text>
+                </View>
+              ) : null}
 
               <View style={styles.claimActions}>
                 <Pressable
@@ -842,22 +962,11 @@ export default function EnsOnboardingScreen() {
                     <ActivityIndicator color={COLORS.textInverted} size="small" />
                   ) : (
                     <>
-                      <Ionicons name="cloud-upload" size={20} color={COLORS.textInverted} />
-                      <Text style={styles.primaryButtonText}>SYNC ENS PROFILE</Text>
+                      <Ionicons name="checkmark-circle" size={20} color={COLORS.textInverted} />
+                      <Text style={styles.primaryButtonText}>FINISH SETUP</Text>
                     </>
                   )}
                 </Pressable>
-              </View>
-
-              <View style={styles.infoSection}>
-                <View style={styles.infoItem}>
-                  <View style={styles.infoBullet}>
-                    <Ionicons name="information-circle" size={12} color={COLORS.textInverted} />
-                  </View>
-                  <Text style={styles.infoText}>
-                    This saves your mode and settlement token to ENS so other users can read the correct payment preferences.
-                  </Text>
-                </View>
               </View>
             </View>
           )}
@@ -877,13 +986,13 @@ export default function EnsOnboardingScreen() {
               {/* Success Message */}
               <Text style={styles.successTitle}>YOU'RE ALL SET!</Text>
               <Text style={styles.successSubtitle}>
-                Your ENS name and payment preferences are now synced onchain.
+                Your name and payment profile are ready.
               </Text>
 
               {/* ENS Name Card */}
               <View style={styles.ensNameCard}>
                 <View style={styles.ensNameHeader}>
-                  <Text style={styles.ensNameLabel}>YOUR ENS NAME</Text>
+                  <Text style={styles.ensNameLabel}>YOUR BUMP NAME</Text>
                 </View>
                 <View style={styles.ensNameBody}>
                   <View style={styles.ensNameIconWrapper}>
@@ -899,7 +1008,7 @@ export default function EnsOnboardingScreen() {
               <View style={styles.shareHintCard}>
                 <Ionicons name="share-social" size={18} color={COLORS.primaryBlue} />
                 <Text style={styles.shareHintText}>
-                  Share this name with anyone to receive payments using your synced ENS preferences.
+                  Share this name with anyone to get paid the way you set up above.
                 </Text>
               </View>
 
@@ -1213,7 +1322,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   preferencesIcon: {
-    backgroundColor: COLORS.decorativeOrange,
+    backgroundColor: COLORS.decorativePink,
+  },
+  tokenIcon: {
+    backgroundColor: COLORS.decorativeGreen,
+  },
+  syncIcon: {
+    backgroundColor: COLORS.decorativeYellow,
   },
   claimTitle: {
     fontSize: 22,
@@ -1285,81 +1400,90 @@ const styles = StyleSheet.create({
     color: COLORS.textInverted,
     textAlign: "right",
   },
-  modeSelector: {
-    gap: 10,
+  slideOptions: {
+    width: "100%",
+    gap: 14,
+    marginBottom: 20,
   },
-  preferenceOption: {
+  slideOptionCard: {
+    width: "100%",
     backgroundColor: COLORS.surface,
     borderWidth: BORDER_THICK.width,
     borderColor: COLORS.border,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    gap: 4,
-  },
-  preferenceOptionSelected: {
-    backgroundColor: COLORS.decorativeYellow,
-  },
-  preferenceOptionTitle: {
-    fontSize: 14,
-    fontWeight: "900",
-    color: COLORS.textPrimary,
-    letterSpacing: 1,
-  },
-  preferenceOptionTitleSelected: {
-    color: COLORS.textPrimary,
-  },
-  preferenceOptionSubtitle: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: COLORS.textMuted,
-  },
-  preferenceOptionSubtitleSelected: {
-    color: COLORS.textPrimary,
-    opacity: 0.8,
-  },
-  tokenSelector: {
+    padding: 18,
     gap: 10,
+    shadowColor: COLORS.border,
+    shadowOffset: SHADOW.sm.offset,
+    shadowOpacity: SHADOW.sm.opacity,
+    shadowRadius: SHADOW.sm.radius,
+    elevation: SHADOW.sm.elevation,
   },
-  tokenOption: {
+  slideOptionCardSelected: {
+    backgroundColor: COLORS.yellow400,
+  },
+  slideOptionTopRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: COLORS.surface,
-    borderWidth: BORDER_THICK.width,
-    borderColor: COLORS.border,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
     gap: 12,
   },
-  tokenOptionSelected: {
-    backgroundColor: COLORS.green400,
-  },
-  tokenOptionTitle: {
-    fontSize: 16,
+  slideOptionTitle: {
+    fontSize: 18,
     fontWeight: "900",
     color: COLORS.textPrimary,
     letterSpacing: 1,
   },
-  tokenOptionTitleSelected: {
+  slideOptionTitleSelected: {
     color: COLORS.textPrimary,
   },
-  tokenOptionSubtitle: {
-    fontSize: 12,
+  slideOptionBody: {
+    fontSize: 13,
     fontWeight: "600",
     color: COLORS.textMuted,
+    lineHeight: 18,
   },
-  tokenOptionSubtitleSelected: {
+  slideOptionBodySelected: {
     color: COLORS.textPrimary,
-    opacity: 0.8,
   },
-  tokenOptionCheck: {
-    width: 28,
-    height: 28,
+  slideOptionBadge: {
+    width: 26,
+    height: 26,
     backgroundColor: COLORS.primaryBlue,
     borderWidth: BORDER_THIN.width,
     borderColor: COLORS.border,
     alignItems: "center",
     justifyContent: "center",
+  },
+  summaryCard: {
+    width: "100%",
+    backgroundColor: COLORS.surface,
+    borderWidth: BORDER_THICK.width,
+    borderColor: COLORS.border,
+    padding: 20,
+    marginBottom: 20,
+    shadowColor: COLORS.border,
+    shadowOffset: SHADOW.sm.offset,
+    shadowOpacity: SHADOW.sm.opacity,
+    shadowRadius: SHADOW.sm.radius,
+    elevation: SHADOW.sm.elevation,
+  },
+  summaryLabel: {
+    fontSize: 10,
+    fontWeight: "900",
+    color: COLORS.textMuted,
+    letterSpacing: 2,
+    marginBottom: 6,
+  },
+  summaryValue: {
+    fontSize: 20,
+    fontWeight: "900",
+    color: COLORS.textPrimary,
+    letterSpacing: 1,
+  },
+  summaryDivider: {
+    height: BORDER_THIN.width,
+    backgroundColor: COLORS.border,
+    marginVertical: 16,
   },
 
   // Status Cards
