@@ -8,7 +8,6 @@ import {
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { COLORS, BORDER_THICK } from "../constants/theme";
-import { TOKEN_SYMBOL } from "../lib/blockchain/contracts";
 import { useOperationalWallet } from "../lib/wallet";
 
 const KEYPAD_ROWS = [
@@ -104,8 +103,9 @@ export default function PayScreen() {
       <View style={styles.amountSection}>
         <View style={styles.amountBoxShadow}>
           <View style={styles.amountBox}>
+            <Text style={styles.amountLabel}>PAY AMOUNT</Text>
             <Text style={styles.amountText}>
-              {formattedAmount} {TOKEN_SYMBOL}
+              {formattedAmount}
             </Text>
           </View>
         </View>
@@ -241,6 +241,14 @@ const styles = StyleSheet.create({
     width: "100%",
     alignItems: "center",
     transform: [{ translateX: -8 }, { translateY: -8 }],
+  },
+  amountLabel: {
+    fontSize: 12,
+    fontWeight: "900",
+    letterSpacing: 2,
+    color: COLORS.textMuted,
+    textAlign: "center",
+    marginBottom: 6,
   },
   amountText: {
     fontSize: 48,

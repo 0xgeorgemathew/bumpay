@@ -13,6 +13,7 @@ import * as Haptics from "expo-haptics";
 import { parseUnits } from "viem";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { usePrivy } from "@privy-io/expo";
+import type { Address } from "viem";
 import { COLORS, BORDER_THICK } from "../constants/theme";
 import { useOperationalWallet } from "../lib/wallet";
 import { playNfcCompleteSound } from "../lib/audio/feedback";
@@ -38,7 +39,8 @@ import {
   CHAIN_ID,
   TOKEN_ADDRESS,
   TOKEN_DECIMALS,
-  TOKEN_SYMBOL,
+  USDT_ADDRESS,
+  getTokenSymbolByAddress,
 } from "../lib/blockchain/contracts";
 
 type PayState =
@@ -110,6 +112,7 @@ function buildPayerIntent(
   payerAddress: `0x${string}`,
   receiverAddress: `0x${string}`,
   amount: bigint,
+  tokenAddress: Address,
 ): TrackedPaymentIntent {
   return {
     sessionId: requestPayload.sessionId,
@@ -117,7 +120,7 @@ function buildPayerIntent(
     from: payerAddress,
     to: receiverAddress,
     amount,
-    tokenAddress: TOKEN_ADDRESS,
+    tokenAddress,
     chainId: CHAIN_ID,
     createdAt: Date.now(),
   };
@@ -227,7 +230,7 @@ export default function PayNfcScreen() {
     smartWalletAddress,
     status: walletStatus,
     retryProvisioning,
-    sendTokens,
+    sendTokenTransfer,
     refreshBalances,
     error: walletError,
   } = useOperationalWallet();
@@ -235,6 +238,7 @@ export default function PayNfcScreen() {
   const [statusLabel, setStatusLabel] = useState(getPayerStatusLabel("waiting"));
   const [payerEnsName, setPayerEnsName] = useState<string | null>(null);
   const [recipientEnsName, setRecipientEnsName] = useState<string | null>(null);
+  const [selectedTokenAddress, setSelectedTokenAddress] = useState<Address | null>(null);
   const [safeToRemove, setSafeToRemove] = useState(false);
   const isProcessingRef = useRef(false);
   const stopWatcherRef = useRef<(() => void) | null>(null);
@@ -349,7 +353,10 @@ export default function PayNfcScreen() {
           requestedAmount,
           funding: {
             chainId: CHAIN_ID,
-            tokenBalance: balances.usdcBalance,
+            tokenBalances: {
+              [TOKEN_ADDRESS.toLowerCase()]: balances.usdcBalance,
+              [USDT_ADDRESS.toLowerCase()]: balances.usdtBalance,
+            },
             nativeBalance: balances.nativeBalance,
           },
           policy: DEFAULT_PAYMENT_POLICY,
@@ -363,11 +370,17 @@ export default function PayNfcScreen() {
           return;
         }
 
+        if (result.directPlan.targetToken === "NATIVE") {
+          throw new Error("Native token payments are not supported");
+        }
+
+        setSelectedTokenAddress(result.directPlan.targetToken);
         const intent = buildPayerIntent(
           requestPayload,
           smartWalletAddress,
           result.directPlan.recipient,
           result.directPlan.targetAmount,
+          result.directPlan.targetToken,
         );
 
         setPayState("broadcasting");
@@ -390,7 +403,7 @@ export default function PayNfcScreen() {
         setStatusLabel(
           getPayerStatusLabel("sending", resolvedProfile.ensName ?? requestPayload.ensName),
         );
-        const hash = await sendTokens(intent.to, intent.amount);
+        const hash = await sendTokenTransfer(intent.tokenAddress, intent.to, intent.amount);
         if (!hash) {
           throw new Error(walletError || "Smart wallet transaction failed");
         }
@@ -411,6 +424,7 @@ export default function PayNfcScreen() {
         setPayState("error");
         setStatusLabel(getPayerStatusLabel("payment_failed"));
         setRecipientEnsName(null);
+        setSelectedTokenAddress(null);
         console.error("Payment request failed:", requestError);
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       } finally {
@@ -422,7 +436,7 @@ export default function PayNfcScreen() {
       handleWatchFailure,
       payerAmount,
       refreshBalances,
-      sendTokens,
+      sendTokenTransfer,
       smartWalletAddress,
       stopReader,
       stopTracking,
@@ -445,6 +459,7 @@ export default function PayNfcScreen() {
 
     setPayState("scanning");
     setStatusLabel(getPayerStatusLabel("ready_to_tap"));
+    setSelectedTokenAddress(null);
     setSafeToRemove(false);
 
     NfcReader.setScanSession("")
@@ -496,15 +511,23 @@ export default function PayNfcScreen() {
     return `${payerEnsName} -> ${recipientEnsName}`;
   }, [payerEnsName, recipientEnsName]);
 
+  const displayedTokenSymbol = useMemo(
+    () => getTokenSymbolByAddress(selectedTokenAddress, "WAIT FOR TAP"),
+    [selectedTokenAddress],
+  );
+
   return (
     <View style={styles.container}>
       <View style={styles.mainContent}>
         <View style={styles.contentStack}>
           <View style={styles.amountBoxShadow}>
             <View style={styles.amountBox}>
+              <Text style={styles.amountLabel}>SETTLEMENT TOKEN</Text>
+              <Text style={styles.tokenText}>{displayedTokenSymbol}</Text>
               <Text style={styles.amountText}>
-                {displayedAmount} {TOKEN_SYMBOL}
+                {displayedAmount}
               </Text>
+              <Text style={styles.tokenHint}>PAYMENT AMOUNT</Text>
             </View>
           </View>
 
@@ -603,11 +626,34 @@ const styles = StyleSheet.create({
     alignItems: "center",
     transform: [{ translateX: -8 }, { translateY: -8 }],
   },
+  amountLabel: {
+    fontSize: 12,
+    fontWeight: "900",
+    letterSpacing: 2,
+    color: COLORS.textMuted,
+    marginBottom: 6,
+    textAlign: "center",
+  },
+  tokenText: {
+    fontSize: 24,
+    fontWeight: "900",
+    color: COLORS.textPrimary,
+    textAlign: "center",
+    marginBottom: 2,
+  },
   amountText: {
     fontSize: 40,
     fontWeight: "900",
     fontStyle: "italic",
     color: COLORS.textPrimary,
+    textAlign: "center",
+  },
+  tokenHint: {
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 1,
+    color: COLORS.textMuted,
+    marginTop: 6,
     textAlign: "center",
   },
   nfcCardShadow: {

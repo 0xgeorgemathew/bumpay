@@ -12,11 +12,11 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { usePrivy } from "@privy-io/expo";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { parseUnits } from "viem";
+import { parseUnits, type Address } from "viem";
 import { COLORS, BORDER_THICK } from "../constants/theme";
 import { useOperationalWallet } from "../lib/wallet";
 import { playNfcCompleteSound } from "../lib/audio/feedback";
-import { getEnsClaimStatus } from "../lib/ens/service";
+import { getEnsClaimStatus, readEnsProfileByLabel } from "../lib/ens/service";
 import { CardEmulation, CardEmulationEvents } from "../lib/nfc/card-emulation";
 import {
   PROTOCOL_VERSION,
@@ -36,7 +36,8 @@ import {
   CHAIN_ID,
   TOKEN_ADDRESS,
   TOKEN_DECIMALS,
-  TOKEN_SYMBOL,
+  getTokenSymbolByAddress,
+  isSupportedPaymentToken,
 } from "../lib/blockchain/contracts";
 import { generatePaymentRequestId } from "../lib/payments/request";
 
@@ -100,7 +101,7 @@ function getReceiverStatusLabel(status: ReceiverStatus) {
       return "PAYMENT FAILED";
   }
 }
-~``
+
 function buildIncomingTrackedIntent(intent: PaymentIntent): TrackedPaymentIntent {
   return {
     sessionId: intent.sessionId,
@@ -244,6 +245,7 @@ export default function ReceiveScreen() {
   const [verifiedEnsName, setVerifiedEnsName] = useState<string | null>(null);
   const [ensCheckComplete, setEnsCheckComplete] = useState(false);
   const [payerEnsName, setPayerEnsName] = useState<string | null>(null);
+  const [receivingTokenAddress, setReceivingTokenAddress] = useState<Address | null>(null);
   const [safeToRemove, setSafeToRemove] = useState(false);
   const requestedAmount = params.amount ?? "0";
   const requestIdRef = useRef(generatePaymentRequestId());
@@ -259,6 +261,7 @@ export default function ReceiveScreen() {
         if (!cancelled) {
           setVerifiedEnsName(null);
           setEnsCheckComplete(false);
+          setReceivingTokenAddress(null);
           setSafeToRemove(false);
         }
         return;
@@ -270,10 +273,16 @@ export default function ReceiveScreen() {
 
       try {
         const status = await getEnsClaimStatus(smartWalletAddress);
+        const profile = status.label ? await readEnsProfileByLabel(status.label) : null;
 
         if (!cancelled) {
           if (status.fullName) {
             setVerifiedEnsName(status.fullName);
+            setReceivingTokenAddress(
+              profile?.defaultAsset?.token && profile.defaultAsset.token !== "NATIVE"
+                ? profile.defaultAsset.token
+                : TOKEN_ADDRESS,
+            );
             setEnsCheckComplete(true);
             setReceiveState("preparing");
             setStatusLabel(getReceiverStatusLabel("waiting"));
@@ -281,6 +290,7 @@ export default function ReceiveScreen() {
           } else {
             setVerifiedEnsName(null);
             setEnsCheckComplete(true);
+            setReceivingTokenAddress(null);
             setReceiveState("error");
             setStatusLabel(getReceiverStatusLabel("claim_ens"));
           }
@@ -289,6 +299,7 @@ export default function ReceiveScreen() {
         if (!cancelled) {
           setVerifiedEnsName(null);
           setEnsCheckComplete(true);
+          setReceivingTokenAddress(null);
           setReceiveState("error");
           setStatusLabel(getReceiverStatusLabel("verify_ens_claim"));
         }
@@ -303,13 +314,18 @@ export default function ReceiveScreen() {
   }, [smartWalletAddress, walletStatus]);
 
   const requestPayload = useMemo<PublishedPaymentRequest | null>(() => {
-    if (!smartWalletAddress || walletStatus !== "ready" || !verifiedEnsName) {
+    if (
+      !smartWalletAddress ||
+      walletStatus !== "ready" ||
+      !verifiedEnsName ||
+      !receivingTokenAddress
+    ) {
       return null;
     }
 
     const amountHint = parsePaymentAmount(requestedAmount)
       ? {
-          assetSymbol: TOKEN_SYMBOL,
+          assetSymbol: getTokenSymbolByAddress(receivingTokenAddress),
           amount: requestedAmount,
           decimals: TOKEN_DECIMALS,
         }
@@ -322,7 +338,7 @@ export default function ReceiveScreen() {
       amountHint,
       profileVersion: "1",
     };
-  }, [requestedAmount, smartWalletAddress, verifiedEnsName, walletStatus]);
+  }, [receivingTokenAddress, requestedAmount, smartWalletAddress, verifiedEnsName, walletStatus]);
 
   useEffect(() => {
     if (privyReady && !user) {
@@ -381,13 +397,18 @@ export default function ReceiveScreen() {
       const trackedIntent = buildIncomingTrackedIntent(intent);
       if (
         trackedIntent.chainId !== CHAIN_ID ||
-        trackedIntent.tokenAddress.toLowerCase() !== TOKEN_ADDRESS.toLowerCase()
+        !smartWalletAddress ||
+        !receivingTokenAddress ||
+        trackedIntent.to.toLowerCase() !== smartWalletAddress.toLowerCase() ||
+        !isSupportedPaymentToken(trackedIntent.tokenAddress) ||
+        trackedIntent.tokenAddress.toLowerCase() !== receivingTokenAddress.toLowerCase()
       ) {
         throw new Error("Unsupported payment intent");
       }
 
       const payerStatus = await getEnsClaimStatus(trackedIntent.from);
       setPayerEnsName(payerStatus.fullName);
+      setReceivingTokenAddress(trackedIntent.tokenAddress);
       playNfcCompleteSound().catch(console.error);
 
       stopTracking();
@@ -405,7 +426,7 @@ export default function ReceiveScreen() {
         },
       });
     },
-    [handleConfirmed, handleWatchFailure, stopPublishing, stopTracking],
+    [handleConfirmed, handleWatchFailure, receivingTokenAddress, smartWalletAddress, stopPublishing, stopTracking],
   );
 
   useEffect(() => {
@@ -566,7 +587,11 @@ export default function ReceiveScreen() {
         <View style={styles.contentStack}>
           <View style={styles.amountBoxShadow}>
             <View style={styles.amountBox}>
-              <Text style={styles.amountText}>{TOKEN_SYMBOL}</Text>
+              <Text style={styles.amountLabel}>SETTLEMENT TOKEN</Text>
+              <Text style={styles.tokenText}>
+                {getTokenSymbolByAddress(receivingTokenAddress, "LOADING")}
+              </Text>
+              <Text style={styles.tokenHint}>RECEIVING IN THIS TOKEN</Text>
             </View>
           </View>
 
@@ -673,11 +698,26 @@ const styles = StyleSheet.create({
     alignItems: "center",
     transform: [{ translateX: -8 }, { translateY: -8 }],
   },
-  amountText: {
-    fontSize: 40,
+  amountLabel: {
+    fontSize: 12,
     fontWeight: "900",
-    fontStyle: "italic",
+    letterSpacing: 2,
+    color: COLORS.textMuted,
+    marginBottom: 6,
+    textAlign: "center",
+  },
+  tokenText: {
+    fontSize: 24,
+    fontWeight: "900",
     color: COLORS.textPrimary,
+    textAlign: "center",
+  },
+  tokenHint: {
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 1,
+    color: COLORS.textMuted,
+    marginTop: 6,
     textAlign: "center",
   },
   nfcCardShadow: {
