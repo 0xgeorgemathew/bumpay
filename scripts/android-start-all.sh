@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 set -eu
 
@@ -91,5 +91,47 @@ launch_apps_when_ready() {
 # Start app launcher in background
 launch_apps_when_ready &
 
-# Start Metro in foreground (keeps stdin for interactive commands)
-exec npx expo start --dev-client --host "$EXPO_HOST" --port "$EXPO_PORT" -c
+# Function to reload all devices
+reload_all_devices() {
+  echo ""
+  echo "Reloading app on all devices..."
+  for serial in $DEVICES; do
+    [ -n "$serial" ] || continue
+    echo "[ $serial ] Restarting $APP_ID..."
+    adb -s "$serial" shell am force-stop "$APP_ID" </dev/null 2>&1
+    adb -s "$serial" shell am start -a android.intent.action.VIEW -d "exp+bump://expo-development-client/?url=${METRO_URL}" </dev/null >/dev/null 2>&1
+  done
+}
+
+# Cleanup function
+cleanup() {
+  if [ -n "$METRO_PID" ]; then
+    kill "$METRO_PID" 2>/dev/null || true
+  fi
+  exit 0
+}
+trap cleanup INT TERM
+
+# Start Metro in background
+npx expo start --dev-client --host "$EXPO_HOST" --port "$EXPO_PORT" -c &
+METRO_PID=$!
+
+# Wait a moment for Metro to start
+sleep 1
+
+echo ""
+echo "Press 'R' to reload app on all devices, Ctrl+C to exit"
+echo ""
+
+# Read stdin in a loop from terminal
+TTY="${TTY:-/dev/tty}"
+while IFS= read -rsn1 key 2>/dev/null; do
+  case "$key" in
+    r|R)
+      reload_all_devices
+      ;;
+  esac
+done <"$TTY"
+
+# Wait for Metro to finish
+wait "$METRO_PID" 2>/dev/null || true
