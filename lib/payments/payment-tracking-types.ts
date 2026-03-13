@@ -1,5 +1,5 @@
 import type { Address, Hex } from "viem";
-import { CHAIN_NAME, TOKEN_SYMBOL } from "../blockchain/contracts";
+import { CHAIN_NAME, getTokenSymbolByAddress } from "../blockchain/contracts";
 
 export type PaymentTrackingStatus =
   | "idle"
@@ -50,7 +50,7 @@ export function buildSuccessRouteParams(
     to: details.to,
     amount: details.amount.toString(),
     tokenAddress: details.tokenAddress,
-    tokenSymbol: TOKEN_SYMBOL,
+    tokenSymbol: getTokenSymbolByAddress(details.tokenAddress),
     chainId: details.chainId.toString(),
     chainName: CHAIN_NAME,
     txHash: details.txHash,

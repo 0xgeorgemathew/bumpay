@@ -1,5 +1,5 @@
 import type { Address, Hex } from "viem";
-import { CHAIN_ID, TOKEN_ADDRESS } from "../blockchain/contracts";
+import { CHAIN_ID, TOKEN_ADDRESS, isSupportedPaymentToken } from "../blockchain/contracts";
 import type { PaymentPolicy } from "./policy";
 import type { RecipientProfile, SupportedToken } from "../recipient-profile";
 
@@ -30,7 +30,7 @@ export interface PaymentPlan {
 
 export interface DirectFundingState {
   chainId: number;
-  tokenBalance: bigint;
+  tokenBalances: Record<string, bigint>;
   nativeBalance: bigint;
 }
 
@@ -65,6 +65,13 @@ export function buildPaymentIntent(
   };
 }
 
+function getFundingBalanceForToken(
+  tokenBalances: Record<string, bigint>,
+  token: Address,
+) {
+  return tokenBalances[token.toLowerCase()] ?? BigInt(0);
+}
+
 export function planPayment({
   profile,
   requestedAmount,
@@ -77,9 +84,15 @@ export function planPayment({
   policy: PaymentPolicy;
 }): PaymentPlanResult {
   const intent = buildPaymentIntent(profile, requestedAmount);
-
+  const targetToken =
+    profile.defaultAsset && profile.defaultAsset.token !== "NATIVE"
+      ? profile.defaultAsset.token
+      : undefined;
   const matchingAsset = profile.acceptedAssets.find(
-    (asset) => asset.chainId === funding.chainId && asset.token === TOKEN_ADDRESS,
+    (asset) =>
+      asset.chainId === funding.chainId &&
+      asset.token !== "NATIVE" &&
+      asset.token === targetToken,
   );
 
   if (!policy.allowedChains.includes(funding.chainId)) {
@@ -91,21 +104,30 @@ export function planPayment({
     };
   }
 
+  if (!targetToken || !isSupportedPaymentToken(targetToken)) {
+    return {
+      intent,
+      directPlan: null,
+      requiresAgent: true,
+      reason: "Recipient does not have a supported receiving token configured.",
+    };
+  }
+
   if (!matchingAsset) {
     return {
       intent,
       directPlan: null,
       requiresAgent: true,
-      reason: "Recipient does not accept the current asset on the current chain.",
+      reason: "Recipient does not accept the configured token on the current chain.",
     };
   }
 
-  if (funding.tokenBalance < requestedAmount) {
+  if (getFundingBalanceForToken(funding.tokenBalances, targetToken) < requestedAmount) {
     return {
       intent,
       directPlan: null,
       requiresAgent: true,
-      reason: "Smart wallet does not hold enough of the accepted token.",
+      reason: "Smart wallet does not hold enough of the receiver's preferred token.",
     };
   }
 
@@ -115,14 +137,14 @@ export function planPayment({
     directPlan: {
       kind: "direct",
       targetChainId: funding.chainId,
-      targetToken: TOKEN_ADDRESS,
+      targetToken: targetToken,
       targetAmount: requestedAmount,
       recipient: profile.primaryAddress,
       steps: [
         {
           kind: "transfer",
           chainId: funding.chainId,
-          token: TOKEN_ADDRESS,
+          token: targetToken,
           to: profile.primaryAddress,
           amount: requestedAmount,
         },
@@ -130,4 +152,3 @@ export function planPayment({
     },
   };
 }
-

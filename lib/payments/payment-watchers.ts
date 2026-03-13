@@ -208,7 +208,7 @@ export function watchSubmittedPayment(
     onLogs: async (logs) => {
       const typedLogs = logs as Array<{ transactionHash: Hex }>;
       const match = typedLogs.at(0);
-      if (!active || !match?.transactionHash) {
+      if (!active || !match?.transactionHash || match.transactionHash !== txHash) {
         return;
       }
 
@@ -216,6 +216,10 @@ export function watchSubmittedPayment(
         const receipt = await fetchReceipt(match.transactionHash);
         if (receipt.status !== "success") {
           fail("failed", "Matched transaction reverted");
+          return;
+        }
+
+        if (!receiptHasExpectedTransfer(receipt, intent)) {
           return;
         }
 
@@ -298,6 +302,10 @@ export async function watchIncomingPayment(
       const receipt = await fetchReceipt(matchedHash);
       if (receipt.status !== "success") {
         fail("failed", "Matched transaction reverted");
+        return;
+      }
+
+      if (!receiptHasExpectedTransfer(receipt, intent)) {
         return;
       }
 
