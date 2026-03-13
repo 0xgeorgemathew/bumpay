@@ -1,0 +1,16 @@
+{
+  "name": "nfc-payment-contracts",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "NFC Payment Verifier smart contracts",
+  "scripts": {
+    "build": "forge build",
+    "deploy": "bun run scripts-js/deploy.ts",
+    "verify": "bun run scripts-js/verify.ts",
+    "generate-abis": "bun run scripts-js/generateTsAbis.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.3.1"
+  },
+  "license": "MIT"
+}
