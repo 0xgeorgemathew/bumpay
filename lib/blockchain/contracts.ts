@@ -9,6 +9,7 @@ import type { Address } from "viem";
 
 export const CHAIN_ID = 84532 as const;
 
+export const USDC_ADDRESS: Address = "0xba50Cd2A20f6DA35D788639E581bca8d0B5d4D5f";
 export const TOKEN_ADDRESS: Address = "0xba50Cd2A20f6DA35D788639E581bca8d0B5d4D5f";
 export const USDT_ADDRESS: Address = "0x0a215D8ba66387DCA84B284D18c3B4ec3de6E54a";
 
@@ -21,7 +22,7 @@ export interface TokenConfig {
 
 export const TOKENS: Record<string, TokenConfig> = {
   USDC: {
-    address: TOKEN_ADDRESS,
+    address: USDC_ADDRESS,
     symbol: "USDC",
     name: "USD Coin",
     decimals: 6,
@@ -33,6 +34,37 @@ export const TOKENS: Record<string, TokenConfig> = {
     decimals: 6,
   },
 };
+
+export const SUPPORTED_PAYMENT_TOKEN_ADDRESSES = Object.values(TOKENS).map(
+  (token) => token.address,
+);
+
+export function getTokenConfigByAddress(address?: string | null): TokenConfig | null {
+  if (!address) {
+    return null;
+  }
+
+  const normalized = address.toLowerCase();
+
+  return (
+    Object.values(TOKENS).find((token) => token.address.toLowerCase() === normalized) ?? null
+  );
+}
+
+export function getTokenSymbolByAddress(address?: string | null, fallback = "TOKEN") {
+  return getTokenConfigByAddress(address)?.symbol ?? fallback;
+}
+
+export function isSupportedPaymentToken(address?: string | null): address is Address {
+  if (!address) {
+    return false;
+  }
+
+  const normalized = address.toLowerCase();
+  return SUPPORTED_PAYMENT_TOKEN_ADDRESSES.some(
+    (tokenAddress) => tokenAddress.toLowerCase() === normalized,
+  );
+}
 
 export const TOKEN_ABI = [
   {

@@ -34,6 +34,8 @@ export const TOKEN_OPTIONS: SelectOption[] = [
   },
 ];
 
+export const P2P_TOKEN_OPTIONS = TOKEN_OPTIONS.filter((option) => option.value !== "NATIVE");
+
 export const CHAIN_OPTIONS: SelectOption[] = [
   {
     value: String(CHAIN_ID),
