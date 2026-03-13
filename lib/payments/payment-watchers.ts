@@ -5,7 +5,10 @@ import {
   type TransactionReceipt,
 } from "viem";
 import { CHAIN_ID, TOKEN_ABI } from "../blockchain/contracts";
-import { getPaymentTrackingClient } from "./payment-tracking-client";
+import {
+  getPaymentTrackingPollingClient,
+  getPaymentTrackingRealtimeClient,
+} from "./payment-tracking-client";
 import type {
   ConfirmedPaymentDetails,
   PaymentTrackingStatus,
@@ -73,7 +76,11 @@ function receiptHasExpectedTransfer(
 }
 
 async function fetchReceipt(hash: Hex) {
-  return getPaymentTrackingClient().getTransactionReceipt({ hash });
+  return getPaymentTrackingPollingClient().getTransactionReceipt({ hash });
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
 }
 
 export function watchSubmittedPayment(
@@ -81,10 +88,12 @@ export function watchSubmittedPayment(
   txHash: Hex,
   callbacks: WatchCallbacks,
 ) {
-  const client = getPaymentTrackingClient();
+  const realtimeClient = getPaymentTrackingRealtimeClient();
+  const pollingClient = getPaymentTrackingPollingClient();
   let active = true;
   let stopBlockWatch: (() => void) | undefined;
   let stopTransferWatch: (() => void) | undefined;
+  let isUsingPollingFallback = false;
 
   const timeout = setTimeout(() => {
     if (!active) {
@@ -92,6 +101,7 @@ export function watchSubmittedPayment(
     }
 
     active = false;
+    clearTimeout(timeout);
     stopBlockWatch?.();
     stopTransferWatch?.();
     callbacks.onFailed("failed", "Confirmation timed out");
@@ -124,36 +134,69 @@ export function watchSubmittedPayment(
     callbacks.onConfirmed(buildConfirmedPaymentDetails(intent, confirmedHash, receipt));
   };
 
-  stopBlockWatch = client.watchBlockNumber({
-    onBlockNumber: async () => {
-      try {
-        const receipt = await fetchReceipt(txHash);
-        if (receipt.status !== "success") {
-          fail("failed", "Transaction reverted");
-          return;
-        }
-
-        if (!receiptHasExpectedTransfer(receipt, intent)) {
-          return;
-        }
-
-        confirm(receipt, txHash);
-      } catch (error) {
-        if (error instanceof TransactionReceiptNotFoundError) {
-          return;
-        }
-
-        const message =
-          error instanceof Error ? error.message : "WebSocket confirmation failed";
-        fail("connection_lost", message);
+  const checkSubmittedReceipt = async () => {
+    try {
+      const receipt = await fetchReceipt(txHash);
+      if (receipt.status !== "success") {
+        fail("failed", "Transaction reverted");
+        return;
       }
+
+      if (!receiptHasExpectedTransfer(receipt, intent)) {
+        return;
+      }
+
+      confirm(receipt, txHash);
+    } catch (error) {
+      if (error instanceof TransactionReceiptNotFoundError) {
+        return;
+      }
+
+      fail("connection_lost", getErrorMessage(error, "Payment confirmation failed"));
+    }
+  };
+
+  const startPollingFallback = (reason: string) => {
+    if (!active || isUsingPollingFallback) {
+      return;
+    }
+
+    isUsingPollingFallback = true;
+    stopBlockWatch?.();
+    stopTransferWatch?.();
+    stopTransferWatch = undefined;
+
+    stopBlockWatch = pollingClient.watchBlockNumber({
+      onBlockNumber: () => {
+        checkSubmittedReceipt().catch((error) => {
+          fail("connection_lost", getErrorMessage(error, reason));
+        });
+      },
+      onError: (error) => {
+        fail(
+          "connection_lost",
+          `${reason}. ${error.message}`.trim(),
+        );
+      },
+    });
+
+    checkSubmittedReceipt().catch((error) => {
+      fail("connection_lost", getErrorMessage(error, reason));
+    });
+  };
+
+  stopBlockWatch = realtimeClient.watchBlockNumber({
+    onBlockNumber: async () => {
+      checkSubmittedReceipt().catch((error) => {
+        fail("connection_lost", getErrorMessage(error, "WebSocket confirmation failed"));
+      });
     },
     onError: (error) => {
-      fail("connection_lost", error.message);
+      startPollingFallback(error.message);
     },
   });
 
-  stopTransferWatch = client.watchContractEvent({
+  stopTransferWatch = realtimeClient.watchContractEvent({
     address: intent.tokenAddress,
     abi: TOKEN_ABI,
     eventName: "Transfer",
@@ -178,13 +221,15 @@ export function watchSubmittedPayment(
 
         confirm(receipt, match.transactionHash);
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Failed to read matched transfer receipt";
-        fail("connection_lost", message);
+        if (error instanceof TransactionReceiptNotFoundError) {
+          return;
+        }
+
+        startPollingFallback(getErrorMessage(error, "Failed to read matched transfer receipt"));
       }
     },
     onError: (error) => {
-      fail("connection_lost", error.message);
+      startPollingFallback(error.message);
     },
   });
 
@@ -204,9 +249,12 @@ export async function watchIncomingPayment(
   intent: TrackedPaymentIntent,
   callbacks: WatchCallbacks,
 ) {
-  const client = getPaymentTrackingClient();
+  const realtimeClient = getPaymentTrackingRealtimeClient();
+  const pollingClient = getPaymentTrackingPollingClient();
   let active = true;
-  const startBlock = await client.getBlockNumber();
+  let stopTransferWatch: (() => void) | undefined;
+  let isUsingPollingFallback = false;
+  const startBlock = await pollingClient.getBlockNumber();
   const fromBlock = startBlock > 0n ? startBlock - 1n : startBlock;
 
   const timeout = setTimeout(() => {
@@ -216,7 +264,7 @@ export async function watchIncomingPayment(
 
     active = false;
     clearTimeout(timeout);
-    unwatch();
+    stopTransferWatch?.();
     callbacks.onFailed("failed", "No matching transfer was detected");
   }, callbacks.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
@@ -230,11 +278,77 @@ export async function watchIncomingPayment(
 
     active = false;
     clearTimeout(timeout);
-    unwatch();
+    stopTransferWatch?.();
     callbacks.onFailed(status, message);
   };
 
-  const unwatch = client.watchContractEvent({
+  const handleTransferLogs = async (logs: unknown) => {
+    const typedLogs = logs as Array<{ transactionHash: Hex }>;
+    const match = typedLogs.at(0);
+    if (!active || !match) {
+      return;
+    }
+
+    const matchedHash = match.transactionHash;
+    if (!matchedHash) {
+      return;
+    }
+
+    try {
+      const receipt = await fetchReceipt(matchedHash);
+      if (receipt.status !== "success") {
+        fail("failed", "Matched transaction reverted");
+        return;
+      }
+
+      active = false;
+      clearTimeout(timeout);
+      stopTransferWatch?.();
+      callbacks.onConfirmed(
+        buildConfirmedPaymentDetails(intent, matchedHash, receipt),
+      );
+    } catch (error) {
+      if (error instanceof TransactionReceiptNotFoundError) {
+        return;
+      }
+
+      fail("connection_lost", getErrorMessage(error, "Failed to read transfer receipt"));
+    }
+  };
+
+  const startPollingFallback = (reason: string) => {
+    if (!active || isUsingPollingFallback) {
+      return;
+    }
+
+    isUsingPollingFallback = true;
+    stopTransferWatch?.();
+
+    stopTransferWatch = pollingClient.watchContractEvent({
+      address: intent.tokenAddress,
+      abi: TOKEN_ABI,
+      eventName: "Transfer",
+      args: {
+        from: intent.from,
+        to: intent.to,
+      },
+      fromBlock,
+      strict: true,
+      onLogs: (logs) => {
+        handleTransferLogs(logs).catch((error) => {
+          fail("connection_lost", getErrorMessage(error, reason));
+        });
+      },
+      onError: (error) => {
+        fail(
+          "connection_lost",
+          `${reason}. ${error.message}`.trim(),
+        );
+      },
+    });
+  };
+
+  stopTransferWatch = realtimeClient.watchContractEvent({
     address: intent.tokenAddress,
     abi: TOKEN_ABI,
     eventName: "Transfer",
@@ -244,40 +358,13 @@ export async function watchIncomingPayment(
     },
     fromBlock,
     strict: true,
-    onLogs: async (logs) => {
-      // Cast logs to include transactionHash - viem's strict mode types are too narrow
-      const typedLogs = logs as Array<{ transactionHash: Hex }>;
-      const match = typedLogs.at(0);
-      if (!active || !match) {
-        return;
-      }
-
-      const txHash = match.transactionHash;
-      if (!txHash) {
-        return;
-      }
-
-      try {
-        const receipt = await fetchReceipt(txHash);
-        if (receipt.status !== "success") {
-          fail("failed", "Matched transaction reverted");
-          return;
-        }
-
-        active = false;
-        clearTimeout(timeout);
-        unwatch();
-        callbacks.onConfirmed(
-          buildConfirmedPaymentDetails(intent, txHash, receipt),
-        );
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Failed to read transfer receipt";
-        fail("connection_lost", message);
-      }
+    onLogs: (logs) => {
+      handleTransferLogs(logs).catch((error) => {
+        fail("connection_lost", getErrorMessage(error, "Failed to read transfer receipt"));
+      });
     },
     onError: (error) => {
-      fail("connection_lost", error.message);
+      startPollingFallback(error.message);
     },
   });
 
@@ -288,7 +375,7 @@ export async function watchIncomingPayment(
 
     active = false;
     clearTimeout(timeout);
-    unwatch();
+    stopTransferWatch?.();
   };
 }
 
