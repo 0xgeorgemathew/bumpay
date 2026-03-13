@@ -41,10 +41,10 @@ transport_kind() {
 
 transport_priority() {
   case "$1" in
-    ip)
+    serial)
       printf '%s\n' "1"
       ;;
-    serial)
+    ip)
       printf '%s\n' "2"
       ;;
     *)
@@ -83,7 +83,8 @@ Usage:
 
 Modes:
   list    Print one canonical ADB transport per physical device. This prefers
-          wireless ip:port transports, then raw serials, then mDNS aliases.
+          raw USB serial transports, then wireless ip:port transports, then
+          mDNS aliases.
   all     Print every online transport exactly as ADB reports it.
   report  Show all online transports grouped by physical device and mark which
           transport "list" will use.
