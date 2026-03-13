@@ -22,6 +22,15 @@ allprojects {
 
 subprojects { subproject ->
   afterEvaluate {
+    def androidExtension = subproject.extensions.findByName("android")
+    if (androidExtension != null && rootProject.ext.has("ndkVersion")) {
+      try {
+        androidExtension.ndkVersion = rootProject.ext.get("ndkVersion")
+      } catch (ignored) {
+        // Some subprojects expose an android extension without ndkVersion.
+      }
+    }
+
     subproject.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
       kotlinOptions {
         jvmTarget = "17"
