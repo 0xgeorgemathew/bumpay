@@ -76,7 +76,7 @@ function isAddressLike(value: string): value is Address {
 
 /**
  * Formats a partial ENS name to a full ENS name
- * Uses the configured parent domain (grid.eth by default)
+ * Uses the configured parent domain
  * @deprecated Use formatFullEnsName from config.ts for new code
  */
 export function formatENSName(value: string): string {

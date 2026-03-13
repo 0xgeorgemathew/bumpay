@@ -1,9 +1,9 @@
 /**
  * ENS contract ABIs and typed helpers for Base Sepolia
  *
- * Verified contract surface from grid-games ENS deployment:
- * - ENS L2 Registrar: 0x85465BBfF2b825481E67A7F1C9eB309e693814E7
- * - ENS L2 Registry: 0xef46c8e7876f8a84e4b4f7e1a641fa6497bd532d
+ * Verified contract surface from the bump.eth Base Sepolia deployment:
+ * - ENS L2 Registrar: 0x5DCD7071366b400880E01886De44555570F2D4a8
+ * - ENS L2 Registry: 0xeb1b97aeda7124560f660f2d900ccd594598525d
  */
 
 import type { Address } from "viem";

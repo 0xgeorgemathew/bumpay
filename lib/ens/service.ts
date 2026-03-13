@@ -13,6 +13,7 @@ import {
   ENS_TEXT_KEYS,
   ENS_REGISTRAR_ADDRESS,
   ENS_REGISTRY_ADDRESS,
+  extractLabelFromEnsName,
   formatFullEnsName,
   normalizeEnsLabel,
   type EnsMode,
@@ -47,7 +48,7 @@ const publicClient = createPublicClient({
 export interface EnsClaimStatus {
   /** Whether the address has an ENS name claimed */
   hasClaim: boolean;
-  /** Full ENS name if claimed (e.g., "alice.grid.eth") */
+  /** Full ENS name if claimed (e.g., "alice.bump.eth") */
   fullName: string | null;
   /** Just the label if claimed (e.g., "alice") */
   label: string | null;
@@ -70,15 +71,17 @@ export async function getEnsClaimStatus(address: Address): Promise<EnsClaimStatu
       return { hasClaim: false, fullName: null, label: null };
     }
 
-    // Extract label from full name
-    const suffix = `.${ENS_PARENT_DOMAIN}`;
-    const label = fullName.toLowerCase().endsWith(suffix.toLowerCase())
-      ? fullName.slice(0, -suffix.length)
-      : null;
+    const label = extractLabelFromEnsName(fullName);
+    if (!label) {
+      console.warn(
+        `Ignoring ENS claim outside ${ENS_PARENT_DOMAIN}: ${fullName} for ${address}`,
+      );
+      return { hasClaim: false, fullName: null, label: null };
+    }
 
     return {
       hasClaim: true,
-      fullName,
+      fullName: formatFullEnsName(label),
       label,
     };
   } catch (error) {
@@ -273,17 +276,9 @@ export interface ResolvedEnsProfile {
 }
 
 export async function resolveEnsForPayment(ensName: string): Promise<ResolvedEnsProfile | null> {
-  // Extract label from full name
-  const suffix = `.${ENS_PARENT_DOMAIN}`;
-  const normalized = ensName.trim().toLowerCase();
-
-  let label: string;
-  if (normalized.endsWith(suffix.toLowerCase())) {
-    label = normalized.slice(0, -suffix.length);
-  } else if (!normalized.includes(".")) {
-    label = normalized;
-  } else {
-    console.error("Invalid ENS name format:", ensName);
+  const label = extractLabelFromEnsName(ensName);
+  if (!label) {
+    console.error(`Invalid ENS name format for ${ENS_PARENT_DOMAIN}:`, ensName);
     return null;
   }
 

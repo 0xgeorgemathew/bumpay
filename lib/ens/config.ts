@@ -1,8 +1,7 @@
 /**
  * ENS configuration for Bump P2P payments
  *
- * All ENS-related constants are centralized here for easy migration
- * from grid.eth to bump.eth through configuration changes only.
+ * All ENS-related constants are centralized here for easy migration.
  */
 
 import type { Address } from "viem";
@@ -14,9 +13,8 @@ import { CHAIN_ID } from "../blockchain/contracts";
 
 /**
  * Parent domain for Bump ENS subdomains
- * Change this to "bump.eth" when ready to migrate
  */
-export const ENS_PARENT_DOMAIN = "grid.eth";
+export const ENS_PARENT_DOMAIN = "bump.eth";
 
 /**
  * Chain ID for ENS operations (Base Sepolia)
@@ -31,13 +29,13 @@ export const ENS_CHAIN_ID = CHAIN_ID;
  * ENS L2 Registrar address on Base Sepolia
  * Handles subdomain registration under the parent domain
  */
-export const ENS_REGISTRAR_ADDRESS: Address = "0x85465BBfF2b825481E67A7F1C9eB309e693814E7";
+export const ENS_REGISTRAR_ADDRESS: Address = "0x5DCD7071366b400880E01886De44555570F2D4a8";
 
 /**
  * ENS L2 Registry address on Base Sepolia
  * Handles text record storage and resolution
  */
-export const ENS_REGISTRY_ADDRESS: Address = "0xef46c8e7876f8a84e4b4f7e1a641fa6497bd532d";
+export const ENS_REGISTRY_ADDRESS: Address = "0xeb1b97aeda7124560f660f2d900ccd594598525d";
 
 // =============================================================================
 // Text Record Keys
@@ -93,7 +91,7 @@ export const ENS_PROFILE_VERSION = "1" as const;
  * Normalizes a label (subdomain part) for ENS
  * - Lowercase
  * - Trimmed
- * - No parent domain suffix
+ * - Removes the configured parent domain suffix only
  */
 export function normalizeEnsLabel(label: string): string {
   const normalized = label.trim().toLowerCase();
@@ -101,10 +99,6 @@ export function normalizeEnsLabel(label: string): string {
 
   if (normalized.endsWith(parentSuffix)) {
     return normalized.slice(0, -parentSuffix.length);
-  }
-
-  if (normalized.endsWith(".eth")) {
-    return normalized.slice(0, -".eth".length);
   }
 
   return normalized;
@@ -124,8 +118,8 @@ export function formatFullEnsName(label: string): string {
 }
 
 /**
- * Extracts the label from a full ENS name
- * Returns null if the name doesn't match the parent domain
+ * Extracts the label from a full ENS name within the configured parent domain.
+ * Returns null for names outside the configured parent domain.
  */
 export function extractLabelFromEnsName(fullName: string): string | null {
   const normalized = fullName.trim().toLowerCase();
@@ -133,11 +127,6 @@ export function extractLabelFromEnsName(fullName: string): string | null {
 
   if (normalized.endsWith(suffix)) {
     return normalized.slice(0, -suffix.length);
-  }
-
-  // Also handle plain labels
-  if (!normalized.includes(".")) {
-    return normalized;
   }
 
   return null;
@@ -152,6 +141,10 @@ export function validateEnsLabel(label: string): string | null {
 
   if (!normalized) {
     return "Username is required";
+  }
+
+  if (normalized.includes(".")) {
+    return `Username must be a single label under ${ENS_PARENT_DOMAIN}`;
   }
 
   if (normalized.length < 3) {

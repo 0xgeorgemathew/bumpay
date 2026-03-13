@@ -12,7 +12,7 @@ export interface PaymentAmountHint {
  */
 export interface P2PPaymentRequest {
   requestId: string;
-  /** ENS name (required for P2P) - e.g., "alice.grid.eth" */
+  /** ENS name (required for P2P) - e.g., "alice.bump.eth" */
   ensName: string;
   /** Optional amount hint for the payment */
   amountHint?: PaymentAmountHint;
@@ -87,4 +87,3 @@ export function generatePaymentRequestId(): string {
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
 }
-
