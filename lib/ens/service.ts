@@ -8,6 +8,7 @@
 
 import { createPublicClient, encodeFunctionData, http, zeroAddress, type Address, type Hex } from "viem";
 import { baseSepolia } from "viem/chains";
+import { CHAIN_ID, isSupportedPaymentToken } from "../blockchain/contracts";
 import {
   ENS_PARENT_DOMAIN,
   ENS_TEXT_KEYS,
@@ -225,7 +226,7 @@ export async function readEnsProfileByNode(node: Hex, label: string): Promise<Bu
 
     return normalizeBumpEnsProfile({
       ensName,
-      profileVersion: (version || "1") as "1",
+      profileVersion: "1",
       mode: (mode || "p2p") as EnsMode,
       defaultAsset: chainId && token ? { chainId, token } : undefined,
     });
@@ -305,11 +306,13 @@ export async function resolveEnsForPayment(ensName: string): Promise<ResolvedEns
     ensName: formatFullEnsName(label),
   };
 
+  const normalizedProfile = normalizeBumpEnsProfile(resolvedProfile);
+
   return {
     ensName: formatFullEnsName(label),
     label,
     address,
-    profile: resolvedProfile,
+    profile: normalizedProfile,
   };
 }
 
@@ -435,13 +438,12 @@ export function validateProfileForPayment(profile: BumpEnsProfile): string | nul
   }
 
   // Check chain is supported (Base Sepolia only for v1)
-  if (profile.defaultAsset.chainId !== 84532) {
+  if (profile.defaultAsset.chainId !== CHAIN_ID) {
     return `Unsupported chain: ${profile.defaultAsset.chainId}. Only Base Sepolia is supported.`;
   }
 
-  // Check token is a valid address
-  if (profile.defaultAsset.token === "NATIVE") {
-    return "Native token payments are not yet supported";
+  if (!isSupportedPaymentToken(profile.defaultAsset.token)) {
+    return "Settlement token must be a supported ERC-20 payment token";
   }
 
   return null;

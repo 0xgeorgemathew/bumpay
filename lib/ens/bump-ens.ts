@@ -1,8 +1,13 @@
 import type { Address } from "viem";
-import { CHAIN_ID, TOKEN_ADDRESS, TOKEN_SYMBOL } from "../blockchain/contracts";
+import {
+  CHAIN_ID,
+  TOKEN_ADDRESS,
+  getTokenSymbolByAddress,
+} from "../blockchain/contracts";
 import {
   ENS_TEXT_KEYS,
   ENS_PARENT_DOMAIN,
+  ENS_PROFILE_VERSION,
   formatFullEnsName,
   normalizeEnsLabel,
 } from "./config";
@@ -56,7 +61,7 @@ export interface PreparedBumpTextRecordUpdates {
 export const DEFAULT_BUMP_ENS_PROFILE: BumpEnsProfile = {
   ensName: "",
   mode: "p2p",
-  profileVersion: "1",
+  profileVersion: ENS_PROFILE_VERSION,
   defaultAsset: {
     chainId: CHAIN_ID,
     token: TOKEN_ADDRESS,
@@ -155,7 +160,7 @@ export function normalizeBumpEnsProfile(
     mode: BUMP_MODE_OPTIONS.includes(profile.mode ?? "p2p")
       ? (profile.mode as BumpMode)
       : "p2p",
-    profileVersion: "1",
+    profileVersion: ENS_PROFILE_VERSION,
     defaultAsset,
     acceptedAssets,
   };
@@ -220,6 +225,8 @@ export function getAcceptedAssetSummary(profile: Partial<BumpEnsProfile> | BumpE
 
   return normalized.acceptedAssets.map((asset) => ({
     ...asset,
-    label: `${asset.chainId} · ${asset.token === "NATIVE" ? "NATIVE" : TOKEN_SYMBOL}`,
+    label: `${asset.chainId} · ${
+      asset.token === "NATIVE" ? "NATIVE" : getTokenSymbolByAddress(asset.token, asset.token)
+    }`,
   }));
 }
