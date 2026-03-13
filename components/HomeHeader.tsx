@@ -9,13 +9,13 @@ import { COLORS, BORDER_THICK, BORDER_THIN } from "../constants/theme";
 import { useBumpEnsDraft } from "../lib/ens/bump-ens-context";
 import { getEnsClaimStatus, readEnsProfileByLabel } from "../lib/ens/service";
 import { useOperationalWallet } from "../lib/wallet";
-import { normalizeEnsLabel } from "../lib/ens/config";
+import { extractLabelFromEnsName } from "../lib/ens/config";
 
 export function HomeHeader() {
   const { user } = usePrivy();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { draft, setDraft } = useBumpEnsDraft();
+  const { draft, setDraft, resetDraft } = useBumpEnsDraft();
   const { smartWalletAddress } = useOperationalWallet();
 
   const [notificationPressed, setNotificationPressed] = useState(false);
@@ -47,25 +47,36 @@ export function HomeHeader() {
             } else if (status.fullName) {
               setEnsNameDisplay(status.fullName);
             }
+          } else {
+            setEnsNameDisplay(null);
+            resetDraft();
           }
         } catch {
           setHasEnsName(false);
+          setEnsNameDisplay(null);
+          resetDraft();
         } finally {
           setIsEnsLoading(false);
         }
       } else {
+        setHasEnsName(false);
+        setEnsNameDisplay(null);
+        resetDraft();
         setIsEnsLoading(false);
       }
     };
     checkEnsStatus();
-  }, [smartWalletAddress, setDraft]);
+  }, [resetDraft, setDraft, smartWalletAddress]);
 
   // Update when draft changes
   useEffect(() => {
-    if (draft.ensName) {
+    if (draft.ensName && extractLabelFromEnsName(draft.ensName)) {
       setHasEnsName(true);
       setEnsNameDisplay(draft.ensName);
       setIsEnsLoading(false);
+    } else if (!draft.ensName) {
+      setHasEnsName(false);
+      setEnsNameDisplay(null);
     }
   }, [draft.ensName]);
 
