@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "Bump",
+    "slug": "bump",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "bump",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "platforms": [
+      "android"
+    ],
+    "android": {
+      "package": "com.bump.wallet",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1A1A2E"
+      }
+    },
+    "plugins": [
+      "expo-dev-client",
+      "expo-router",
+      "react-native-quick-crypto",
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true
+        }
+      ],
+      "expo-web-browser",
+      "expo-font",
+      "expo-build-properties"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "splash": {
+      "backgroundColor": "#FFD700",
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain"
+    }
+  }
+}
