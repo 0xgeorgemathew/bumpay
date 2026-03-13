@@ -1,17 +1,27 @@
 /**
  * Blockchain contract configuration for NFC payments
  *
- * Token and faucet addresses are external contracts managed outside this project.
- * Payment verifier uses deployedContracts from the contracts package.
+ * All contract addresses and ABIs are sourced from deployedContracts.ts
+ * which is auto-generated from the contracts package deployments.
  */
 
-import type { Address } from "viem";
+import type { Address, Abi } from "viem";
+import { deployedContracts, getContractAddress } from "./deployedContracts";
 
 export const CHAIN_ID = 84532 as const;
 
+// ============ Token Addresses (from deployed contracts) ============
+
 export const USDC_ADDRESS: Address = "0xba50Cd2A20f6DA35D788639E581bca8d0B5d4D5f";
-export const TOKEN_ADDRESS: Address = "0xba50Cd2A20f6DA35D788639E581bca8d0B5d4D5f";
+export const TOKEN_ADDRESS: Address = USDC_ADDRESS; // Primary payment token
 export const USDT_ADDRESS: Address = "0x0a215D8ba66387DCA84B284D18c3B4ec3de6E54a";
+
+// ============ Verifier Contract ============
+
+export const VERIFIER_ADDRESS: Address = getContractAddress("84532", "NFCPaymentVerifier");
+export const VERIFIER_ABI = deployedContracts["84532"]["NFCPaymentVerifier"].abi as Abi;
+
+// ============ Token Configuration ============
 
 export interface TokenConfig {
   address: Address;
@@ -76,6 +86,26 @@ export const TOKEN_ABI = [
       { name: "value", type: "uint256", indexed: false, internalType: "uint256" },
     ],
     anonymous: false,
+  },
+  {
+    type: "function",
+    name: "allowance",
+    inputs: [
+      { name: "owner", type: "address", internalType: "address" },
+      { name: "spender", type: "address", internalType: "address" },
+    ],
+    outputs: [{ name: "", type: "uint256", internalType: "uint256" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "approve",
+    inputs: [
+      { name: "spender", type: "address", internalType: "address" },
+      { name: "amount", type: "uint256", internalType: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool", internalType: "bool" }],
+    stateMutability: "nonpayable",
   },
   {
     type: "function",
