@@ -19,15 +19,15 @@ import {
 import {
   getEnsClaimStatus,
   checkLabelAvailability,
-    claimSubdomain,
-    getNodeForLabel,
-    getNodeOwner,
-    readEnsProfileByLabel,
-    writeEnsProfile,
-    type WalletWriteClient,
+  claimSubdomain,
+  getNodeForLabel,
+  getNodeOwner,
+  readEnsProfileByLabel,
+  writeEnsProfile,
+  type WalletWriteClient,
 } from "../lib/ens/service";
 import { useOperationalWallet } from "../lib/wallet";
-import { TOKEN_OPTIONS, CHAIN_OPTIONS } from "../lib/blockchain/select-options";
+import { P2P_TOKEN_OPTIONS } from "../lib/blockchain/select-options";
 import * as Haptics from "expo-haptics";
 
 type ClaimFlowStatus =
@@ -334,50 +334,20 @@ export function EnsPreferencesCard({
     showSavedIndicator();
   }, [setDraft, showSavedIndicator]);
 
-  const updateAcceptedAsset = useCallback((
-    index: number,
-    field: "chainId" | "token" | "priority",
+  const updateSettlementToken = useCallback((
     value: string,
   ) => {
     setDraft((current) => ({
       ...current,
-      acceptedAssets: current.acceptedAssets.map((asset, assetIndex) => {
-        if (assetIndex !== index) return asset;
-
-        if (field === "chainId") {
-          return { ...asset, chainId: Number(value) || asset.chainId };
-        }
-        if (field === "priority") {
-          return { ...asset, priority: Number(value) || 0 };
-        }
-        return {
-          ...asset,
-          token: value.trim().toUpperCase() === "NATIVE" ? "NATIVE" : (value.trim() as `0x${string}`),
-        };
-      }),
-    }));
-    showSavedIndicator();
-  }, [setDraft, showSavedIndicator]);
-
-  const removeAsset = useCallback((index: number) => {
-    setDraft((current) => ({
-      ...current,
-      acceptedAssets: current.acceptedAssets.length === 1
-        ? current.acceptedAssets
-        : current.acceptedAssets.filter((_, i) => i !== index),
-    }));
-    showSavedIndicator();
-  }, [setDraft, showSavedIndicator]);
-
-  const addAsset = useCallback(() => {
-    setDraft((current) => ({
-      ...current,
+      defaultAsset: {
+        chainId: current.defaultAsset?.chainId ?? 84532,
+        token: value.trim() as `0x${string}`,
+      },
       acceptedAssets: [
-        ...current.acceptedAssets,
         {
           chainId: current.defaultAsset?.chainId ?? 84532,
-          token: current.defaultAsset?.token ?? ("NATIVE" as const),
-          priority: current.acceptedAssets.length,
+          token: value.trim() as `0x${string}`,
+          priority: 0,
         },
       ],
     }));
@@ -542,33 +512,18 @@ export function EnsPreferencesCard({
                   ))}
                 </View>
 
-                <Text style={styles.sectionLabel}>ACCEPTED ASSETS</Text>
-                {draft.acceptedAssets.map((asset, index) => (
-                  <View key={`${asset.chainId}-${asset.priority}-${index}`} style={styles.assetCard}>
-                    <NeoSelect
-                      label="Chain"
-                      options={CHAIN_OPTIONS}
-                      value={String(asset.chainId)}
-                      onChange={(value) => updateAcceptedAsset(index, "chainId", value)}
-                    />
-                    <NeoSelect
-                      label="Token"
-                      options={TOKEN_OPTIONS}
-                      value={asset.token === "NATIVE" ? "NATIVE" : asset.token}
-                      onChange={(value) => updateAcceptedAsset(index, "token", value)}
-                    />
-                    <NeoButton
-                      title="Remove Asset"
-                      onPress={() => removeAsset(index)}
-                      variant="outline"
-                      size="small"
-                      disabled={draft.acceptedAssets.length === 1}
-                    />
-                  </View>
-                ))}
-
-                <View style={styles.actionRow}>
-                  <NeoButton title="Add Asset" onPress={addAsset} variant="secondary" size="small" />
+                <Text style={styles.sectionLabel}>SETTLEMENT TOKEN</Text>
+                <View style={styles.assetCard}>
+                  <NeoSelect
+                    label="Settlement Token"
+                    options={P2P_TOKEN_OPTIONS}
+                    value={draft.defaultAsset?.token ?? P2P_TOKEN_OPTIONS[0]?.value ?? ""}
+                    onChange={updateSettlementToken}
+                  />
+                  <Text style={styles.hintText}>
+                    This is the token other people should use for P2P settlement when they tap to
+                    pay you.
+                  </Text>
                 </View>
 
                 <View style={styles.saveRow}>
@@ -754,11 +709,6 @@ const styles = StyleSheet.create({
     borderWidth: BORDER_THICK.width,
     borderColor: COLORS.border,
     backgroundColor: COLORS.backgroundLight,
-  },
-  actionRow: {
-    flexDirection: "row",
-    gap: 12,
-    marginBottom: 16,
   },
   saveRow: {
     marginTop: 8,
