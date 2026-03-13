@@ -561,11 +561,11 @@ export default function ReceiveScreen() {
     router.back();
   };
 
-  const handleOpenSettings = async () => {
+  const handleOpenEnsOnboarding = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     stopTracking();
     await stopPublishing();
-    router.push("/(tabs)/settings" as never);
+    router.push("/ens-onboarding" as never);
   };
 
   const handleRetryProvisioning = async () => {
@@ -652,8 +652,8 @@ export default function ReceiveScreen() {
 
         {walletStatus === "ready" && !verifiedEnsName ? (
           <View style={styles.footerButtonShadow}>
-            <Pressable onPress={handleOpenSettings} style={styles.warningButton}>
-              <Text style={styles.footerButtonText}>OPEN SETTINGS TO CLAIM ENS</Text>
+            <Pressable onPress={handleOpenEnsOnboarding} style={styles.warningButton}>
+              <Text style={styles.footerButtonText}>OPEN ENS ONBOARDING</Text>
             </Pressable>
           </View>
         ) : null}

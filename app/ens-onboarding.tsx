@@ -20,6 +20,8 @@ import { usePrivy } from "@privy-io/expo";
 import { COLORS, BORDER_THICK, SHADOW, BORDER_THIN } from "../constants/theme";
 import {
   DEFAULT_BUMP_ENS_PROFILE,
+  BUMP_MODE_OPTIONS,
+  type BumpMode,
 } from "../lib/ens/bump-ens";
 import { useBumpEnsDraft } from "../lib/ens/bump-ens-context";
 import {
@@ -32,14 +34,20 @@ import {
   getEnsClaimStatus,
   checkLabelAvailability,
   claimSubdomain,
+  getNodeForLabel,
+  getNodeOwner,
+  readEnsProfileByLabel,
+  writeEnsProfile,
   type WalletWriteClient,
 } from "../lib/ens/service";
+import { P2P_TOKEN_OPTIONS } from "../lib/blockchain/select-options";
 import { useOperationalWallet } from "../lib/wallet";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
-type Step = "welcome" | "claim" | "success";
+type Step = "welcome" | "claim" | "preferences" | "success";
 type ClaimStatus = "idle" | "checking" | "available" | "taken" | "claiming" | "error";
+type ProfileSyncStatus = "idle" | "saving" | "error";
 
 export default function EnsOnboardingScreen() {
   const router = useRouter();
@@ -55,6 +63,7 @@ export default function EnsOnboardingScreen() {
 
   const [currentStep, setCurrentStep] = useState<Step>("welcome");
   const [claimStatus, setClaimStatus] = useState<ClaimStatus>("idle");
+  const [profileSyncStatus, setProfileSyncStatus] = useState<ProfileSyncStatus>("idle");
   const [usernameInput, setUsernameInput] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -101,6 +110,27 @@ export default function EnsOnboardingScreen() {
       if (smartWalletAddress) {
         try {
           const status = await getEnsClaimStatus(smartWalletAddress);
+          if (status.hasClaim && status.fullName) {
+            const onchainProfile = status.label
+              ? await readEnsProfileByLabel(status.label)
+              : null;
+
+            setDraft(
+              onchainProfile ?? {
+                ...DEFAULT_BUMP_ENS_PROFILE,
+                ensName: status.fullName,
+              },
+            );
+
+            if (onchainProfile) {
+              router.replace("/(tabs)");
+              return;
+            }
+
+            setCurrentStep("preferences");
+            return;
+          }
+
           if (status.hasClaim) {
             router.replace("/(tabs)");
           }
@@ -110,7 +140,7 @@ export default function EnsOnboardingScreen() {
       }
     };
     checkExistingEns();
-  }, [smartWalletAddress, router]);
+  }, [smartWalletAddress, router, setDraft]);
 
   // Entrance animations
   useEffect(() => {
@@ -194,11 +224,6 @@ export default function EnsOnboardingScreen() {
     setCurrentStep("claim");
   }, []);
 
-  const handleSkip = useCallback(async () => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    router.replace("/(tabs)");
-  }, [router]);
-
   const handleCheckAvailability = useCallback(async () => {
     const label = normalizeEnsLabel(usernameInput);
     const validationError = validateEnsLabel(label);
@@ -229,6 +254,28 @@ export default function EnsOnboardingScreen() {
     }
   }, [usernameInput]);
 
+  const waitForClaimStatus = useCallback(
+    async (expectedFullName: string, maxAttempts = 12, delayMs = 2500) => {
+      if (!smartWalletAddress) {
+        return null;
+      }
+
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const status = await getEnsClaimStatus(smartWalletAddress);
+        if (status.fullName?.toLowerCase() === expectedFullName.toLowerCase()) {
+          return status;
+        }
+
+        if (attempt < maxAttempts - 1) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+      }
+
+      return null;
+    },
+    [smartWalletAddress],
+  );
+
   const handleClaim = useCallback(async () => {
     if (!smartWalletAddress || !walletClient) {
       setError(walletBlockedMessage);
@@ -244,19 +291,138 @@ export default function EnsOnboardingScreen() {
       await claimSubdomain(walletClient, label, smartWalletAddress);
 
       const fullName = formatFullEnsName(label);
+      const claimedStatus = await waitForClaimStatus(fullName);
+
+      if (!claimedStatus?.fullName) {
+        throw new Error("Claim transaction was submitted but the ENS name was not confirmed onchain");
+      }
+
       setDraft({
         ...DEFAULT_BUMP_ENS_PROFILE,
         ensName: fullName,
       });
 
-      setCurrentStep("success");
+      setCurrentStep("preferences");
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch {
+    } catch (claimError) {
       setClaimStatus("error");
-      setError("Failed to claim username. Please try again.");
+      setError(
+        claimError instanceof Error
+          ? claimError.message
+          : "Failed to claim username. Please try again.",
+      );
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
-  }, [smartWalletAddress, usernameInput, setDraft, walletBlockedMessage, walletClient]);
+  }, [
+    smartWalletAddress,
+    usernameInput,
+    setDraft,
+    waitForClaimStatus,
+    walletBlockedMessage,
+    walletClient,
+  ]);
+
+  const waitForProfileSync = useCallback(
+    async (label: string, maxAttempts = 12, delayMs = 2500) => {
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const profile = await readEnsProfileByLabel(label);
+        if (
+          profile &&
+          profile.mode === draft.mode &&
+          profile.defaultAsset?.chainId === draft.defaultAsset?.chainId &&
+          profile.defaultAsset?.token === draft.defaultAsset?.token
+        ) {
+          return profile;
+        }
+
+        if (attempt < maxAttempts - 1) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+      }
+
+      return null;
+    },
+    [draft.defaultAsset?.chainId, draft.defaultAsset?.token, draft.mode],
+  );
+
+  const updateMode = useCallback((mode: BumpMode) => {
+    setDraft((current) => ({ ...current, mode }));
+    setProfileSyncStatus("idle");
+    setError(null);
+  }, [setDraft]);
+
+  const updateSettlementToken = useCallback((value: string) => {
+    setDraft((current) => ({
+      ...current,
+      defaultAsset: {
+        chainId: current.defaultAsset?.chainId ?? 84532,
+        token: value.trim() as `0x${string}`,
+      },
+      acceptedAssets: [
+        {
+          chainId: current.defaultAsset?.chainId ?? 84532,
+          token: value.trim() as `0x${string}`,
+          priority: 0,
+        },
+      ],
+    }));
+    setProfileSyncStatus("idle");
+    setError(null);
+  }, [setDraft]);
+
+  const handleSaveProfile = useCallback(async () => {
+    if (!draft.ensName || !walletClient) {
+      setError(walletBlockedMessage);
+      return;
+    }
+
+    const label = normalizeEnsLabel(draft.ensName);
+    if (!label) {
+      setError("Invalid ENS name");
+      return;
+    }
+
+    setProfileSyncStatus("saving");
+    setError(null);
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+
+    try {
+      const node = await getNodeForLabel(label);
+      if (!node) {
+        throw new Error("Failed to get ENS node");
+      }
+
+      const nodeOwner = await getNodeOwner(node);
+      if (!nodeOwner) {
+        throw new Error("ENS node owner not found onchain");
+      }
+
+      if (!smartWalletAddress || nodeOwner.toLowerCase() !== smartWalletAddress.toLowerCase()) {
+        throw new Error(
+          `ENS name is owned by ${nodeOwner}, but the app is trying to write with ${smartWalletAddress ?? "no wallet"}`,
+        );
+      }
+
+      await writeEnsProfile(walletClient, node, draft);
+      const syncedProfile = await waitForProfileSync(label);
+      if (!syncedProfile) {
+        throw new Error("Profile transactions were submitted but the ENS records were not confirmed onchain");
+      }
+
+      setDraft(syncedProfile);
+      setProfileSyncStatus("idle");
+      setCurrentStep("success");
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (syncError) {
+      setProfileSyncStatus("error");
+      setError(
+        syncError instanceof Error
+          ? syncError.message
+          : "Failed to sync ENS profile. Please try again.",
+      );
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
+  }, [draft, setDraft, smartWalletAddress, waitForProfileSync, walletBlockedMessage, walletClient]);
 
   const handleFinish = useCallback(async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
@@ -376,7 +542,7 @@ export default function EnsOnboardingScreen() {
                   <View style={styles.featureContent}>
                     <Text style={styles.featureTitle}>CLAIM YOUR NAME</Text>
                     <Text style={styles.featureDescription}>
-                      Get a unique ENS username. Others can send you money using just your name.
+                      Get a unique ENS username before entering the app. Others can send you money using just your name.
                     </Text>
                   </View>
                 </View>
@@ -414,9 +580,6 @@ export default function EnsOnboardingScreen() {
                 >
                   <Ionicons name="arrow-forward" size={20} color={COLORS.textInverted} />
                   <Text style={styles.primaryButtonText}>CLAIM MY NAME</Text>
-                </Pressable>
-                <Pressable style={styles.skipButton} onPress={handleSkip}>
-                  <Text style={styles.skipButtonText}>Skip for now</Text>
                 </Pressable>
               </View>
             </View>
@@ -539,9 +702,6 @@ export default function EnsOnboardingScreen() {
                     )}
                   </Pressable>
                 )}
-                <Pressable style={styles.skipButton} onPress={handleSkip}>
-                  <Text style={styles.skipButtonText}>Skip for now</Text>
-                </Pressable>
               </View>
 
               {/* Info */}
@@ -552,6 +712,150 @@ export default function EnsOnboardingScreen() {
                   </View>
                   <Text style={styles.infoText}>
                     Your ENS name will automatically resolve to your wallet address.
+                  </Text>
+                </View>
+              </View>
+            </View>
+          )}
+
+          {currentStep === "preferences" && (
+            <View style={styles.stepContainer}>
+              <View style={styles.claimHeader}>
+                <View style={styles.claimIconShadow}>
+                  <View style={[styles.claimIcon, styles.preferencesIcon]}>
+                    <Ionicons name="options" size={36} color={COLORS.textInverted} />
+                  </View>
+                </View>
+                <Text style={styles.claimTitle}>Set Payment Preferences</Text>
+                <Text style={styles.claimSubtitle}>
+                  Choose your mode and settlement token, then sync your ENS profile before entering the app.
+                </Text>
+              </View>
+
+              <View style={styles.inputCard}>
+                <Text style={styles.inputLabel}>MODE</Text>
+                <View style={styles.modeSelector}>
+                  {BUMP_MODE_OPTIONS.map((mode) => {
+                    const selected = draft.mode === mode;
+                    return (
+                      <Pressable
+                        key={mode}
+                        onPress={() => updateMode(mode)}
+                        style={[
+                          styles.preferenceOption,
+                          selected && styles.preferenceOptionSelected,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.preferenceOptionTitle,
+                            selected && styles.preferenceOptionTitleSelected,
+                          ]}
+                        >
+                          {mode.toUpperCase()}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.preferenceOptionSubtitle,
+                            selected && styles.preferenceOptionSubtitleSelected,
+                          ]}
+                        >
+                          {mode === "p2p"
+                            ? "Personal payments"
+                            : mode === "merchant"
+                              ? "Merchant-only profile"
+                              : "P2P and merchant"}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+
+              <View style={styles.inputCard}>
+                <Text style={styles.inputLabel}>SETTLEMENT TOKEN</Text>
+                <View style={styles.tokenSelector}>
+                  {P2P_TOKEN_OPTIONS.map((option) => {
+                    const selected =
+                      draft.defaultAsset?.token?.toLowerCase() === option.value.toLowerCase();
+
+                    return (
+                      <Pressable
+                        key={option.value}
+                        onPress={() => updateSettlementToken(option.value)}
+                        style={[
+                          styles.tokenOption,
+                          selected && styles.tokenOptionSelected,
+                        ]}
+                      >
+                        <View>
+                          <Text
+                            style={[
+                              styles.tokenOptionTitle,
+                              selected && styles.tokenOptionTitleSelected,
+                            ]}
+                          >
+                            {option.label}
+                          </Text>
+                          <Text
+                            style={[
+                              styles.tokenOptionSubtitle,
+                              selected && styles.tokenOptionSubtitleSelected,
+                            ]}
+                          >
+                            {option.subtitle}
+                          </Text>
+                        </View>
+                        {selected ? (
+                          <View style={styles.tokenOptionCheck}>
+                            <Ionicons
+                              name="checkmark"
+                              size={16}
+                              color={COLORS.textInverted}
+                            />
+                          </View>
+                        ) : null}
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+
+              {error && (
+                <View style={styles.errorCard}>
+                  <Ionicons name="alert-circle" size={16} color={COLORS.textInverted} />
+                  <Text style={styles.errorText}>{error}</Text>
+                </View>
+              )}
+
+              <View style={styles.claimActions}>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.primaryButton,
+                    (!walletClient || profileSyncStatus === "saving") && styles.buttonDisabled,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  onPress={handleSaveProfile}
+                  disabled={!walletClient || profileSyncStatus === "saving"}
+                >
+                  {profileSyncStatus === "saving" ? (
+                    <ActivityIndicator color={COLORS.textInverted} size="small" />
+                  ) : (
+                    <>
+                      <Ionicons name="cloud-upload" size={20} color={COLORS.textInverted} />
+                      <Text style={styles.primaryButtonText}>SYNC ENS PROFILE</Text>
+                    </>
+                  )}
+                </Pressable>
+              </View>
+
+              <View style={styles.infoSection}>
+                <View style={styles.infoItem}>
+                  <View style={styles.infoBullet}>
+                    <Ionicons name="information-circle" size={12} color={COLORS.textInverted} />
+                  </View>
+                  <Text style={styles.infoText}>
+                    This saves your mode and settlement token to ENS so other users can read the correct payment preferences.
                   </Text>
                 </View>
               </View>
@@ -573,7 +877,7 @@ export default function EnsOnboardingScreen() {
               {/* Success Message */}
               <Text style={styles.successTitle}>YOU'RE ALL SET!</Text>
               <Text style={styles.successSubtitle}>
-                Your username is now registered on the blockchain.
+                Your ENS name and payment preferences are now synced onchain.
               </Text>
 
               {/* ENS Name Card */}
@@ -595,7 +899,7 @@ export default function EnsOnboardingScreen() {
               <View style={styles.shareHintCard}>
                 <Ionicons name="share-social" size={18} color={COLORS.primaryBlue} />
                 <Text style={styles.shareHintText}>
-                  Share this name with anyone to receive payments instantly!
+                  Share this name with anyone to receive payments using your synced ENS preferences.
                 </Text>
               </View>
 
@@ -885,17 +1189,6 @@ const styles = StyleSheet.create({
   primaryButtonTextWhite: {
     color: COLORS.primaryBlue,
   },
-  skipButton: {
-    paddingVertical: 12,
-  },
-  skipButtonText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: COLORS.textInverted,
-    opacity: 0.8,
-    textAlign: "center",
-  },
-
   // Claim Step
   claimHeader: {
     alignItems: "center",
@@ -918,6 +1211,9 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     alignItems: "center",
     justifyContent: "center",
+  },
+  preferencesIcon: {
+    backgroundColor: COLORS.decorativeOrange,
   },
   claimTitle: {
     fontSize: 22,
@@ -988,6 +1284,82 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: COLORS.textInverted,
     textAlign: "right",
+  },
+  modeSelector: {
+    gap: 10,
+  },
+  preferenceOption: {
+    backgroundColor: COLORS.surface,
+    borderWidth: BORDER_THICK.width,
+    borderColor: COLORS.border,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    gap: 4,
+  },
+  preferenceOptionSelected: {
+    backgroundColor: COLORS.decorativeYellow,
+  },
+  preferenceOptionTitle: {
+    fontSize: 14,
+    fontWeight: "900",
+    color: COLORS.textPrimary,
+    letterSpacing: 1,
+  },
+  preferenceOptionTitleSelected: {
+    color: COLORS.textPrimary,
+  },
+  preferenceOptionSubtitle: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: COLORS.textMuted,
+  },
+  preferenceOptionSubtitleSelected: {
+    color: COLORS.textPrimary,
+    opacity: 0.8,
+  },
+  tokenSelector: {
+    gap: 10,
+  },
+  tokenOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: COLORS.surface,
+    borderWidth: BORDER_THICK.width,
+    borderColor: COLORS.border,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    gap: 12,
+  },
+  tokenOptionSelected: {
+    backgroundColor: COLORS.green400,
+  },
+  tokenOptionTitle: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: COLORS.textPrimary,
+    letterSpacing: 1,
+  },
+  tokenOptionTitleSelected: {
+    color: COLORS.textPrimary,
+  },
+  tokenOptionSubtitle: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: COLORS.textMuted,
+  },
+  tokenOptionSubtitleSelected: {
+    color: COLORS.textPrimary,
+    opacity: 0.8,
+  },
+  tokenOptionCheck: {
+    width: 28,
+    height: 28,
+    backgroundColor: COLORS.primaryBlue,
+    borderWidth: BORDER_THIN.width,
+    borderColor: COLORS.border,
+    alignItems: "center",
+    justifyContent: "center",
   },
 
   // Status Cards

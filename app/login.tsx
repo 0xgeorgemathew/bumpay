@@ -48,7 +48,7 @@ export default function LoginScreen() {
 
   useEffect(() => {
     if (isReady && user) {
-      router.replace("/(tabs)");
+      router.replace("/ens-onboarding");
     }
   }, [isReady, router, user]);
 

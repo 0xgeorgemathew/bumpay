@@ -40,6 +40,7 @@ export default function RootLayout() {
                 <Stack.Screen name="pay-nfc" />
                 <Stack.Screen name="receive" />
                 <Stack.Screen name="payment-success" />
+                <Stack.Screen name="ens-onboarding" />
                 <Stack.Screen name="ens-profile" />
               </Stack>
             </BalanceProvider>

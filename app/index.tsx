@@ -46,7 +46,7 @@ export default function SplashScreen() {
     hasNavigated.current = true;
     
     if (isReady && user) {
-      router.replace("/(tabs)");
+      router.replace("/ens-onboarding");
     } else {
       router.replace("/login");
     }
