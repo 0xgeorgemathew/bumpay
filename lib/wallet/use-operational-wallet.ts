@@ -52,6 +52,7 @@ export interface UseOperationalWalletResult {
   refreshBalances: () => Promise<WalletSnapshot | null>;
   mintTestTokens: (amount?: bigint) => Promise<Hex | null>;
   mintTestUSDT: (amount?: bigint) => Promise<Hex | null>;
+  sendTokenTransfer: (tokenAddress: Address, recipient: Address, amount: bigint) => Promise<Hex | null>;
   sendTokens: (recipient: Address, amount: bigint) => Promise<Hex | null>;
   sendContractTransaction: (to: Address, data: Hex, value?: bigint) => Promise<Hex | null>;
 }
@@ -413,17 +414,28 @@ function useOperationalWalletValue(): UseOperationalWalletResult {
     [sendContractTransaction, smartWalletAddress],
   );
 
-  const sendTokens = useCallback(
-    async (recipient: Address, amount: bigint): Promise<Hex | null> => {
+  const sendTokenTransfer = useCallback(
+    async (
+      tokenAddress: Address,
+      recipient: Address,
+      amount: bigint,
+    ): Promise<Hex | null> => {
       const data = encodeFunctionData({
         abi: TOKEN_ABI,
         functionName: "transfer",
         args: [recipient, amount],
       });
 
-      return sendContractTransaction(TOKEN_ADDRESS, data);
+      return sendContractTransaction(tokenAddress, data);
     },
     [sendContractTransaction],
+  );
+
+  const sendTokens = useCallback(
+    async (recipient: Address, amount: bigint): Promise<Hex | null> => {
+      return sendTokenTransfer(TOKEN_ADDRESS, recipient, amount);
+    },
+    [sendTokenTransfer],
   );
 
   return {
@@ -439,6 +451,7 @@ function useOperationalWalletValue(): UseOperationalWalletResult {
     refreshBalances,
     mintTestTokens,
     mintTestUSDT,
+    sendTokenTransfer,
     sendTokens,
     sendContractTransaction,
   };
