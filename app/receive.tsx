@@ -100,11 +100,7 @@ function getReceiverStatusLabel(status: ReceiverStatus) {
       return "PAYMENT FAILED";
   }
 }
-
-function buildReceiverSuccessParams(details: ConfirmedPaymentDetails) {
-  return buildSuccessRouteParams(details, "receiver");
-}
-
+~``
 function buildIncomingTrackedIntent(intent: PaymentIntent): TrackedPaymentIntent {
   return {
     sessionId: intent.sessionId,
@@ -350,10 +346,13 @@ export default function ReceiveScreen() {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.replace({
         pathname: "/payment-success",
-        params: buildReceiverSuccessParams(details),
+        params: buildSuccessRouteParams(details, "receiver", {
+          fromLabel: payerEnsName,
+          toLabel: verifiedEnsName,
+        }),
       });
     },
-    [router],
+    [payerEnsName, router, verifiedEnsName],
   );
 
   const handleWatchFailure = useCallback(

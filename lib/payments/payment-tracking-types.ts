@@ -37,6 +37,10 @@ export function buildPaymentExplorerUrl(txHash: Hex) {
 export function buildSuccessRouteParams(
   details: ConfirmedPaymentDetails,
   role: "payer" | "receiver",
+  labels?: {
+    fromLabel?: string | null;
+    toLabel?: string | null;
+  },
 ) {
   return {
     role,
@@ -52,5 +56,7 @@ export function buildSuccessRouteParams(
     txHash: details.txHash,
     blockNumber: details.blockNumber.toString(),
     explorerUrl: buildPaymentExplorerUrl(details.txHash),
+    fromLabel: labels?.fromLabel,
+    toLabel: labels?.toLabel,
   };
 }

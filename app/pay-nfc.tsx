@@ -136,10 +136,6 @@ function buildNfcPaymentIntent(intent: TrackedPaymentIntent): PaymentIntent {
   };
 }
 
-function buildPayerSuccessParams(details: ConfirmedPaymentDetails) {
-  return buildSuccessRouteParams(details, "payer");
-}
-
 function NfcIcon({ size = 48, color = "#fff" }: { size?: number; color?: string }) {
   return <MaterialCommunityIcons name="nfc" size={size} color={color} />;
 }
@@ -298,10 +294,13 @@ export default function PayNfcScreen() {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.replace({
         pathname: "/payment-success",
-        params: buildPayerSuccessParams(details),
+        params: buildSuccessRouteParams(details, "payer", {
+          fromLabel: payerEnsName,
+          toLabel: recipientEnsName,
+        }),
       });
     },
-    [refreshBalances, router],
+    [payerEnsName, recipientEnsName, refreshBalances, router],
   );
 
   const handleWatchFailure = useCallback(
