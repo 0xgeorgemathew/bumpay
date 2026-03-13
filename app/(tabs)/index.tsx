@@ -14,7 +14,7 @@ import { useOperationalWallet } from "../../lib/wallet";
 export default function HomeScreen() {
   const router = useRouter();
   const { user, isReady } = usePrivy();
-  const { state: balanceState, prefetchBalance } = useBalance();
+  const { state: balanceState, prefetchBalance, refreshBalance } = useBalance();
   const wallet = useOperationalWallet();
   const hasInitialized = useRef(false);
 
@@ -77,6 +77,10 @@ export default function HomeScreen() {
     router.push("/(tabs)/settings" as never);
   };
 
+  const handleRefreshBalances = async () => {
+    await refreshBalance({ waitForWallet: true });
+  };
+
   const handleViewAll = () => {
     router.push("/(tabs)/history" as never);
   };
@@ -92,6 +96,10 @@ export default function HomeScreen() {
         <BalanceCard
           tokens={tokens}
           onDetailsPress={handleDetails}
+          onRefreshPress={handleRefreshBalances}
+          isRefreshing={balanceState.isLoading}
+          hasLoaded={balanceState.lastFetchedAt !== null}
+          error={balanceState.error}
         />
 
         {!wallet.isReady ? (

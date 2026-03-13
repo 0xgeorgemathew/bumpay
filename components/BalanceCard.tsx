@@ -14,14 +14,26 @@ interface TokenBalance {
 interface BalanceCardProps {
   tokens: TokenBalance[];
   onDetailsPress: () => void;
+  onRefreshPress: () => Promise<void> | void;
+  isRefreshing: boolean;
+  hasLoaded: boolean;
+  error?: string | null;
 }
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const CARD_PADDING = 16;
 const CAROUSEL_WIDTH = SCREEN_WIDTH - 80;
 
-export function BalanceCard({ tokens, onDetailsPress }: BalanceCardProps) {
+export function BalanceCard({
+  tokens,
+  onDetailsPress,
+  onRefreshPress,
+  isRefreshing,
+  hasLoaded,
+  error,
+}: BalanceCardProps) {
   const [detailsPressed, setDetailsPressed] = useState(false);
+  const [refreshPressed, setRefreshPressed] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const scrollViewRef = useRef<ScrollView>(null);
@@ -29,6 +41,11 @@ export function BalanceCard({ tokens, onDetailsPress }: BalanceCardProps) {
   const handleDetailsPress = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     setModalVisible(true);
+  };
+
+  const handleRefreshPress = async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    await onRefreshPress();
   };
 
   const handleScroll = (event: any) => {
@@ -52,13 +69,42 @@ export function BalanceCard({ tokens, onDetailsPress }: BalanceCardProps) {
     return fromTokenUnits(token.balance).toFixed(2);
   };
 
+  const balanceHeadline = hasLoaded ? formatUsdValue(totalUsdValue) : isRefreshing ? "SYNCING..." : "PENDING...";
+  const statusText = error
+    ? error.toUpperCase()
+    : isRefreshing
+      ? "REFRESHING ALL TOKENS"
+      : hasLoaded
+        ? "ALL TOKENS LIVE"
+        : "WAITING FOR FIRST BALANCE SYNC";
+
   return (
     <>
       <View style={styles.cardShadow}>
         <View style={styles.container}>
           <View style={styles.content}>
-            <Text style={styles.label}>Total Balance</Text>
-            <Text style={styles.balance}>{formatUsdValue(totalUsdValue)}</Text>
+            <View style={styles.headerRow}>
+              <Text style={styles.label}>Total Balance</Text>
+              <View style={styles.refreshShadow}>
+                <Pressable
+                  onPress={handleRefreshPress}
+                  onPressIn={() => setRefreshPressed(true)}
+                  onPressOut={() => setRefreshPressed(false)}
+                  disabled={isRefreshing}
+                  style={[
+                    styles.refreshButton,
+                    refreshPressed && styles.refreshButtonPressed,
+                    isRefreshing && styles.refreshButtonDisabled,
+                  ]}
+                >
+                  <Text style={styles.refreshButtonText}>
+                    {isRefreshing ? "SYNCING" : "REFRESH ALL"}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+
+            <Text style={styles.balance}>{balanceHeadline}</Text>
             
             <View style={styles.carouselContainer}>
               <ScrollView
@@ -79,7 +125,9 @@ export function BalanceCard({ tokens, onDetailsPress }: BalanceCardProps) {
                           <View style={styles.tokenInfo}>
                             <Text style={styles.nestedLabel}>{token.symbol} Balance</Text>
                             <View style={styles.balanceRow}>
-                              <Text style={styles.nestedBalance}>{formatTokenBalance(token)}</Text>
+                              <Text style={styles.nestedBalance}>
+                                {hasLoaded ? formatTokenBalance(token) : "--"}
+                              </Text>
                               <Text style={styles.tokenSymbol}>{token.symbol}</Text>
                             </View>
                           </View>
@@ -111,6 +159,10 @@ export function BalanceCard({ tokens, onDetailsPress }: BalanceCardProps) {
                 ))}
               </View>
             )}
+
+            <View style={[styles.statusStrip, error && styles.statusStripError]}>
+              <Text style={styles.statusStripText}>{statusText}</Text>
+            </View>
           </View>
         </View>
       </View>
@@ -141,7 +193,7 @@ export function BalanceCard({ tokens, onDetailsPress }: BalanceCardProps) {
                 <View style={styles.modalBody}>
                   <View style={styles.totalRow}>
                     <Text style={styles.totalLabel}>Total Balance</Text>
-                    <Text style={styles.totalValue}>{formatUsdValue(totalUsdValue)}</Text>
+                    <Text style={styles.totalValue}>{balanceHeadline}</Text>
                   </View>
 
                   {tokens.map((token, index) => (
@@ -156,8 +208,12 @@ export function BalanceCard({ tokens, onDetailsPress }: BalanceCardProps) {
                         </View>
                       </View>
                       <View style={styles.tokenRowRight}>
-                        <Text style={styles.tokenAmount}>{formatTokenBalance(token)}</Text>
-                        <Text style={styles.tokenFiat}>${token.usdValue.toFixed(2)}</Text>
+                        <Text style={styles.tokenAmount}>
+                          {hasLoaded ? formatTokenBalance(token) : "--"}
+                        </Text>
+                        <Text style={styles.tokenFiat}>
+                          {hasLoaded ? `$${token.usdValue.toFixed(2)}` : "--"}
+                        </Text>
                       </View>
                     </View>
                   ))}
@@ -185,6 +241,12 @@ const styles = StyleSheet.create({
   content: {
     gap: 4,
   },
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+  },
   label: {
     color: COLORS.textInverted,
     fontSize: 14,
@@ -197,6 +259,30 @@ const styles = StyleSheet.create({
     fontSize: 36,
     fontWeight: "900",
     letterSpacing: -1,
+  },
+  refreshShadow: {
+    backgroundColor: COLORS.border,
+  },
+  refreshButton: {
+    backgroundColor: COLORS.yellow400,
+    borderWidth: BORDER_THICK.width,
+    borderColor: COLORS.border,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    transform: [{ translateX: -4 }, { translateY: -4 }],
+  },
+  refreshButtonPressed: {
+    transform: [{ translateX: 0 }, { translateY: 0 }],
+  },
+  refreshButtonDisabled: {
+    backgroundColor: COLORS.surface,
+  },
+  refreshButtonText: {
+    color: COLORS.textPrimary,
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 1,
+    textTransform: "uppercase",
   },
   carouselContainer: {
     marginTop: 16,
@@ -288,6 +374,25 @@ const styles = StyleSheet.create({
   indicatorActive: {
     opacity: 1,
     backgroundColor: COLORS.yellow400,
+  },
+  statusStrip: {
+    marginTop: 12,
+    alignSelf: "flex-start",
+    backgroundColor: COLORS.progressYellow,
+    borderWidth: BORDER_THICK.width,
+    borderColor: COLORS.border,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  statusStripError: {
+    backgroundColor: COLORS.red500,
+  },
+  statusStripText: {
+    color: COLORS.textPrimary,
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 1,
+    textTransform: "uppercase",
   },
   modalOverlay: {
     flex: 1,

@@ -25,6 +25,11 @@ interface BalanceState {
   lastFetchedAt: number | null;
 }
 
+interface BalanceFetchOptions {
+  force?: boolean;
+  waitForWallet?: boolean;
+}
+
 type BalanceAction =
   | { type: "FETCH_START" }
   | { type: "FETCH_SUCCESS"; balances: TokenBalances; allowance: bigint; ethBalance: bigint }
@@ -64,11 +69,14 @@ function reducer(state: BalanceState, action: BalanceAction): BalanceState {
 
 interface BalanceContextValue {
   state: BalanceState;
-  refreshBalance: () => Promise<void>;
-  prefetchBalance: () => Promise<void>;
+  refreshBalance: (options?: BalanceFetchOptions) => Promise<boolean>;
+  prefetchBalance: (options?: BalanceFetchOptions) => Promise<boolean>;
 }
 
 const BalanceContext = createContext<BalanceContextValue | null>(null);
+
+const WALLET_READY_WAIT_MS = 12000;
+const WALLET_READY_POLL_MS = 250;
 
 export function useBalance(): BalanceContextValue {
   const context = useContext(BalanceContext);
@@ -86,7 +94,7 @@ export function BalanceProvider({ children }: { children: ReactNode }) {
   const refreshBalancesRef = useRef(wallet.refreshBalances);
   const smartWalletAddressRef = useRef(wallet.smartWalletAddress);
   const walletReadyRef = useRef(wallet.isReady);
-  const isFetchingRef = useRef(false);
+  const inFlightFetchRef = useRef<Promise<boolean> | null>(null);
 
   useEffect(() => {
     refreshBalancesRef.current = wallet.refreshBalances;
@@ -94,49 +102,80 @@ export function BalanceProvider({ children }: { children: ReactNode }) {
     walletReadyRef.current = wallet.isReady;
   }, [wallet.isReady, wallet.refreshBalances, wallet.smartWalletAddress]);
 
-  const refreshBalance = useCallback(async () => {
-    if (!walletReadyRef.current || !smartWalletAddressRef.current) {
-      return;
+  const waitForWalletReady = useCallback(async () => {
+    if (walletReadyRef.current && smartWalletAddressRef.current) {
+      return true;
     }
 
-    if (isFetchingRef.current) {
-      return;
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < WALLET_READY_WAIT_MS) {
+      await new Promise((resolve) => setTimeout(resolve, WALLET_READY_POLL_MS));
+      if (walletReadyRef.current && smartWalletAddressRef.current) {
+        return true;
+      }
     }
 
-    isFetchingRef.current = true;
-    dispatch({ type: "FETCH_START" });
+    return walletReadyRef.current && !!smartWalletAddressRef.current;
+  }, []);
 
-    try {
-      const result = await refreshBalancesRef.current();
-      if (result) {
+  const refreshBalance = useCallback(async (options: BalanceFetchOptions = {}) => {
+    const { waitForWallet = false } = options;
+
+    if (inFlightFetchRef.current) {
+      return inFlightFetchRef.current;
+    }
+
+    const fetchPromise = (async () => {
+      const walletReady = waitForWallet
+        ? await waitForWalletReady()
+        : walletReadyRef.current && !!smartWalletAddressRef.current;
+
+      if (!walletReady) {
+        if (waitForWallet) {
+          dispatch({ type: "FETCH_ERROR", error: "Wallet is not ready yet" });
+        }
+        return false;
+      }
+
+      dispatch({ type: "FETCH_START" });
+
+      try {
+        const result = await refreshBalancesRef.current();
+        if (!result) {
+          dispatch({ type: "FETCH_ERROR", error: "Failed to fetch balance" });
+          return false;
+        }
+
         dispatch({
           type: "FETCH_SUCCESS",
           balances: { usdc: result.usdcBalance, usdt: result.usdtBalance },
           allowance: BigInt(0),
           ethBalance: result.nativeBalance,
         });
-      } else {
-        dispatch({ type: "FETCH_ERROR", error: "Failed to fetch balance" });
+        return true;
+      } catch (err) {
+        dispatch({
+          type: "FETCH_ERROR",
+          error: err instanceof Error ? err.message : "Unknown error",
+        });
+        return false;
+      } finally {
+        inFlightFetchRef.current = null;
       }
-    } catch (err) {
-      dispatch({
-        type: "FETCH_ERROR",
-        error: err instanceof Error ? err.message : "Unknown error",
-      });
-    } finally {
-      isFetchingRef.current = false;
-    }
-  }, []);
+    })();
 
-  const prefetchBalance = useCallback(async () => {
-    if (!walletReadyRef.current) {
-      return;
+    inFlightFetchRef.current = fetchPromise;
+    return fetchPromise;
+  }, [waitForWalletReady]);
+
+  const prefetchBalance = useCallback(async (options: BalanceFetchOptions = {}) => {
+    const { force = false } = options;
+
+    if (!force && state.lastFetchedAt && Date.now() - state.lastFetchedAt < 5000) {
+      return true;
     }
 
-    if (state.lastFetchedAt && Date.now() - state.lastFetchedAt < 5000) {
-      return;
-    }
-    await refreshBalance();
+    return refreshBalance(options);
   }, [state.lastFetchedAt, refreshBalance]);
 
   useEffect(() => {
