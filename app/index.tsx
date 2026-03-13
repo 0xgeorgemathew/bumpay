@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, Dimensions, Animated, Easing } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -11,8 +11,10 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 export default function SplashScreen() {
   const router = useRouter();
   const { isReady, user } = usePrivy();
-  const { prefetchBalance } = useBalance();
+  const { state: balanceState, prefetchBalance } = useBalance();
   const [displayPercentage, setDisplayPercentage] = useState(0);
+  const [animationComplete, setAnimationComplete] = useState(false);
+  const [initializationComplete, setInitializationComplete] = useState(false);
   const hasNavigated = useRef(false);
   
   const logoScale = useRef(new Animated.Value(0.3)).current;
@@ -39,7 +41,7 @@ export default function SplashScreen() {
   const decor4Opacity = useRef(new Animated.Value(0)).current;
   const decor4Scale = useRef(new Animated.Value(0)).current;
 
-  const handleNavigation = () => {
+  const handleNavigation = useCallback(() => {
     if (hasNavigated.current) return;
     hasNavigated.current = true;
     
@@ -48,13 +50,41 @@ export default function SplashScreen() {
     } else {
       router.replace("/login");
     }
-  };
+  }, [isReady, router, user]);
 
   useEffect(() => {
-    if (isReady && user) {
-      prefetchBalance();
+    setInitializationComplete(false);
+
+    if (!isReady) {
+      return;
     }
+
+    let cancelled = false;
+
+    const initializeApp = async () => {
+      if (user) {
+        await prefetchBalance({ waitForWallet: true });
+      }
+
+      if (!cancelled) {
+        setInitializationComplete(true);
+      }
+    };
+
+    initializeApp();
+
+    return () => {
+      cancelled = true;
+    };
   }, [isReady, user, prefetchBalance]);
+
+  useEffect(() => {
+    if (!animationComplete || !initializationComplete || !isReady) {
+      return;
+    }
+
+    handleNavigation();
+  }, [animationComplete, handleNavigation, initializationComplete, isReady]);
 
   useEffect(() => {
     const smoothEasing = Easing.bezier(0.25, 0.1, 0.25, 1);
@@ -164,7 +194,7 @@ export default function SplashScreen() {
 
     mainAnimation.start((result) => {
       if (result.finished) {
-        handleNavigation();
+        setAnimationComplete(true);
       }
     });
 
@@ -188,6 +218,14 @@ export default function SplashScreen() {
     inputRange: [-30, 3],
     outputRange: ['-30deg', '3deg'],
   });
+
+  const statusLabel = !isReady
+    ? "BOOTING PRIVY"
+    : user
+      ? balanceState.isLoading || !initializationComplete
+        ? "SYNCING ALL BALANCES"
+        : "BALANCES READY"
+      : "READY TO LOGIN";
 
   return (
     <View style={styles.container}>
@@ -287,6 +325,9 @@ export default function SplashScreen() {
       <Animated.View style={[styles.footer, { opacity: footerOpacity }]}>
         <View style={styles.footerTextContainer}>
           <Text style={styles.footerText}>SECURED BY BUMP PROTOCOL</Text>
+        </View>
+        <View style={styles.statusTextContainer}>
+          <Text style={styles.statusText}>{statusLabel}</Text>
         </View>
         <View style={styles.footerIcons}>
           <Ionicons name="shield-checkmark" size={20} color={COLORS.textPrimary} />
@@ -421,6 +462,20 @@ const styles = StyleSheet.create({
   footerText: {
     fontSize: 12,
     fontWeight: "700",
+    color: COLORS.textPrimary,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+  },
+  statusTextContainer: {
+    backgroundColor: COLORS.progressYellow,
+    borderWidth: BORDER_THICK.width,
+    borderColor: COLORS.border,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+  },
+  statusText: {
+    fontSize: 11,
+    fontWeight: "900",
     color: COLORS.textPrimary,
     textTransform: "uppercase",
     letterSpacing: 1,
