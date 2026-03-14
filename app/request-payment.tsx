@@ -9,7 +9,7 @@ import {
   Animated,
   Easing,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { usePrivy } from "@privy-io/expo";
@@ -190,6 +190,7 @@ function DotsPattern() {
 
 export default function MerchantScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ amount?: string; skipKeypad?: string }>();
   const { user, isReady: privyReady } = usePrivy();
   const { addTransaction } = useTransactions();
   const {
@@ -198,8 +199,12 @@ export default function MerchantScreen() {
     sendContractTransaction,
   } = useOperationalWallet();
 
-  const [screenState, setScreenState] = useState<MerchantScreenState>("enter_amount");
-  const [amountInput, setAmountInput] = useState("");
+  const skipKeypad = params.skipKeypad === "true" && parsePaymentAmount(params.amount ?? "") !== null;
+  const isPosCheckoutFlow = skipKeypad;
+  const [screenState, setScreenState] = useState<MerchantScreenState>(
+    skipKeypad ? "ready_to_receive" : "enter_amount"
+  );
+  const [amountInput, setAmountInput] = useState(params.amount ?? "");
   const [pressedKey, setPressedKey] = useState<string | null>(null);
   const [errorType, setErrorType] = useState<MerchantError | undefined>();
   const [session, setSession] = useState<MerchantSession | null>(null);
@@ -427,7 +432,7 @@ export default function MerchantScreen() {
   }, [handleClaimPayment, session]);
 
   const handleStartSession = useCallback(async () => {
-    if (isStartingSessionRef.current || screenState !== "enter_amount") {
+    if (isStartingSessionRef.current || (screenState !== "enter_amount" && screenState !== "ready_to_receive")) {
       return;
     }
 
@@ -482,7 +487,7 @@ export default function MerchantScreen() {
 
   useEffect(() => {
     if (
-      screenState !== "enter_amount" ||
+      (screenState !== "enter_amount" && screenState !== "ready_to_receive") ||
       !walletReady ||
       !smartWalletAddress ||
       !parsePaymentAmount(amountInput)
@@ -490,14 +495,25 @@ export default function MerchantScreen() {
       return;
     }
 
-    const timeoutId = setTimeout(() => {
-      handleStartSession().catch(console.error);
-    }, 1000);
+    const shouldSkipKeypad = params.skipKeypad === "true";
 
-    return () => {
-      clearTimeout(timeoutId);
-    };
-  }, [amountInput, handleStartSession, screenState, smartWalletAddress, walletReady]);
+    // Skip keypad immediately if amount provided from POS (already in ready_to_receive)
+    if (shouldSkipKeypad && screenState === "ready_to_receive") {
+      handleStartSession().catch(console.error);
+      return;
+    }
+
+    // Auto-start after delay for normal flow
+    if (screenState === "enter_amount") {
+      const timeoutId = setTimeout(() => {
+        handleStartSession().catch(console.error);
+      }, 1000);
+
+      return () => {
+        clearTimeout(timeoutId);
+      };
+    }
+  }, [amountInput, handleStartSession, params.skipKeypad, screenState, smartWalletAddress, walletReady]);
 
   const handleCancel = useCallback(async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
@@ -514,13 +530,19 @@ export default function MerchantScreen() {
     await CardEmulation.setMerchantMode(false);
     await CardEmulation.clearPaymentRequest();
     await CardEmulation.clearPaymentAuthorization();
+
+    if (isPosCheckoutFlow) {
+      router.back();
+      return;
+    }
+
     setScreenState("enter_amount");
     setAmountInput("");
     setErrorType(undefined);
     setSession(null);
     setCustomerEnsName(null);
     setCustomerAddress(null);
-  }, []);
+  }, [isPosCheckoutFlow, router]);
 
   const displayAmount = useMemo(() => {
     if (session) {
@@ -661,7 +683,9 @@ export default function MerchantScreen() {
         {screenState === "error" && (
           <View style={styles.footerButtonShadow}>
             <Pressable onPress={handleReset} style={styles.footerButton}>
-              <Text style={styles.footerButtonText}>TRY AGAIN</Text>
+              <Text style={styles.footerButtonText}>
+                {isPosCheckoutFlow ? "BACK TO CHECKOUT" : "TRY AGAIN"}
+              </Text>
             </Pressable>
           </View>
         )}
