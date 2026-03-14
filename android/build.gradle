@@ -16,24 +16,22 @@ allprojects {
   repositories {
     google()
     mavenCentral()
-    maven { url = 'https://www.jitpack.io' }
+    maven { url 'https://www.jitpack.io' }
   }
-}
 
-subprojects { subproject ->
-  afterEvaluate {
-    def androidExtension = subproject.extensions.findByName("android")
-    if (androidExtension != null && rootProject.ext.has("ndkVersion")) {
-      try {
-        androidExtension.ndkVersion = rootProject.ext.get("ndkVersion")
-      } catch (ignored) {
-        // Some subprojects expose an android extension without ndkVersion.
+  // Keep Java and Kotlin aligned with the Android toolchain used by Expo/RN.
+  afterEvaluate { project ->
+    if (project.hasProperty('android')) {
+      project.android {
+        compileOptions {
+          sourceCompatibility JavaVersion.VERSION_17
+          targetCompatibility JavaVersion.VERSION_17
+        }
       }
     }
-
-    subproject.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+    project.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
       kotlinOptions {
-        jvmTarget = "17"
+        jvmTarget = '17'
       }
     }
   }
