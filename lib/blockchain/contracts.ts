@@ -7,7 +7,7 @@
  */
 
 import type { Address, Abi } from "viem";
-import { deployedContracts, getContractAddress } from "./deployedContracts";
+import { getContract } from "./deployedContracts";
 
 export const CHAIN_ID = 84532 as const;
 
@@ -19,8 +19,9 @@ export const USDT_ADDRESS: Address = "0x0a215D8ba66387DCA84B284D18c3B4ec3de6E54a
 
 // ============ Verifier Contract ============
 
-export const VERIFIER_ADDRESS: Address = getContractAddress("84532", "NFCPaymentVerifier");
-export const VERIFIER_ABI = deployedContracts["84532"]["NFCPaymentVerifier"].abi as Abi;
+const verifierDeployment = getContract("84532", "NFCPaymentVerifier");
+export const VERIFIER_ADDRESS: Address = verifierDeployment.address;
+export const VERIFIER_ABI = verifierDeployment.abi as Abi;
 
 // ============ Token Configuration ============
 

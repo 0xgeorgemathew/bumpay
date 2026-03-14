@@ -4,7 +4,7 @@
 export const deployedContracts = {
   "84532": {
     "NFCPaymentVerifier": {
-      "address": "0x5e0ba461d9d785a00c26f36f1d5184d6044ffe40",
+      "address": "0xe1247d0F2F2bd41c4bA1f10bC2D1394F1462Ca13",
       "abi": [
         {
           "type": "constructor",

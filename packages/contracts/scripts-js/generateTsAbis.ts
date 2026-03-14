@@ -2,17 +2,6 @@
 import { readdirSync, readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
 
-interface Transaction {
-  transactionType: string;
-  contractName: string;
-  contractAddress: string;
-  arguments?: string;
-}
-
-interface BroadcastRun {
-  transactions: Transaction[];
-}
-
 interface ChainDeployments {
   [contractName: string]: {
     address: string;
@@ -24,23 +13,17 @@ interface AllDeployments {
   [chainId: string]: ChainDeployments;
 }
 
-const BROADCAST_DIR = join(process.cwd(), "broadcast");
-const OUT_DIR = join(process.cwd(), "out");
-
-function findLatestRunFile(chainId: string): string | null {
-  const chainBroadcastDir = join(BROADCAST_DIR, "Deploy.s.sol", chainId);
-
-  if (!existsSync(chainBroadcastDir)) {
-    return null;
-  }
-
-  const runFiles = readdirSync(chainBroadcastDir)
-    .filter((f) => f.startsWith("run-") && f.endsWith(".json"))
-    .sort()
-    .reverse();
-
-  return runFiles.length > 0 ? join(chainBroadcastDir, runFiles[0]) : null;
+interface DeploymentFileEntry {
+  address: string;
 }
+
+interface DeploymentFile {
+  chainId?: string;
+  [contractName: string]: unknown;
+}
+
+const DEPLOYMENTS_DIR = join(process.cwd(), "deployments");
+const OUT_DIR = join(process.cwd(), "out");
 
 function loadArtifact(contractName: string): { abi: unknown[] } | null {
   const artifactPath = join(
@@ -54,6 +37,50 @@ function loadArtifact(contractName: string): { abi: unknown[] } | null {
   }
 
   return JSON.parse(readFileSync(artifactPath, "utf-8"));
+}
+
+function isAddress(value: unknown): value is string {
+  return typeof value === "string" && /^0x[a-fA-F0-9]{40}$/.test(value);
+}
+
+function decodeHexJson(value: string): DeploymentFileEntry | null {
+  if (!value.startsWith("0x")) {
+    return null;
+  }
+
+  try {
+    const decoded = Buffer.from(value.slice(2), "hex").toString("utf-8");
+    const parsed = JSON.parse(decoded) as unknown;
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "address" in parsed &&
+      isAddress((parsed as Record<string, unknown>).address)
+    ) {
+      return { address: (parsed as Record<string, string>).address };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function extractDeploymentAddress(value: unknown): string | null {
+  if (typeof value === "object" && value !== null && "address" in value) {
+    const address = (value as Record<string, unknown>).address;
+    return isAddress(address) ? address : null;
+  }
+
+  if (typeof value === "string") {
+    if (isAddress(value)) {
+      return value;
+    }
+
+    return decodeHexJson(value)?.address ?? null;
+  }
+
+  return null;
 }
 
 function generateTsContent(allDeployments: AllDeployments): string {
@@ -111,58 +138,54 @@ export function getContractAddress(chainId: ChainId, contractName: string): \`0x
 export function generateTsAbis(): boolean {
   console.log("\n📦 Generating TypeScript ABIs...\n");
 
-  if (!existsSync(BROADCAST_DIR)) {
-    console.log("❌ No broadcast directory found. Run deployment first.");
+  if (!existsSync(DEPLOYMENTS_DIR)) {
+    console.log("❌ No deployments directory found. Run deployment first.");
     return false;
   }
 
-  // Find all chain directories in Deploy.s.sol broadcast
-  const deployBroadcastDir = join(BROADCAST_DIR, "Deploy.s.sol");
-  if (!existsSync(deployBroadcastDir)) {
-    console.log("❌ No deployment broadcasts found.");
-    return false;
-  }
+  const deploymentFiles = readdirSync(DEPLOYMENTS_DIR)
+    .filter((fileName) => fileName.endsWith(".json"));
 
-  const chainDirs = readdirSync(deployBroadcastDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name);
-
-  if (chainDirs.length === 0) {
+  if (deploymentFiles.length === 0) {
     console.log("❌ No deployment records found.");
     return false;
   }
 
   const allDeployments: AllDeployments = {};
 
-  for (const chainId of chainDirs) {
+  for (const fileName of deploymentFiles) {
+    const chainId = fileName.replace(/\.json$/, "");
     console.log(`Processing chain ${chainId}...`);
 
-    const runFilePath = findLatestRunFile(chainId);
-    if (!runFilePath) {
-      console.log(`  ⚠️  No run files found for chain ${chainId}`);
-      continue;
-    }
-
-    const runData: BroadcastRun = JSON.parse(
-      readFileSync(runFilePath, "utf-8"),
-    );
+    const filePath = join(DEPLOYMENTS_DIR, fileName);
+    const deploymentFile = JSON.parse(
+      readFileSync(filePath, "utf-8"),
+    ) as DeploymentFile;
     const deployments: ChainDeployments = {};
 
-    for (const tx of runData.transactions || []) {
-      if (tx.transactionType !== "CREATE" || !tx.contractName) continue;
-
-      const artifact = loadArtifact(tx.contractName);
-      if (!artifact) {
-        console.log(`  ⚠️  Artifact not found for ${tx.contractName}`);
+    for (const [contractName, rawValue] of Object.entries(deploymentFile)) {
+      if (contractName === "chainId") {
         continue;
       }
 
-      deployments[tx.contractName] = {
-        address: tx.contractAddress,
+      const contractAddress = extractDeploymentAddress(rawValue);
+      if (!contractAddress) {
+        console.log(`  ⚠️  Invalid deployment entry for ${contractName}`);
+        continue;
+      }
+
+      const artifact = loadArtifact(contractName);
+      if (!artifact) {
+        console.log(`  ⚠️  Artifact not found for ${contractName}`);
+        continue;
+      }
+
+      deployments[contractName] = {
+        address: contractAddress,
         abi: artifact.abi,
       };
 
-      console.log(`  ✅ ${tx.contractName}: ${tx.contractAddress}`);
+      console.log(`  ✅ ${contractName}: ${contractAddress}`);
     }
 
     if (Object.keys(deployments).length > 0) {

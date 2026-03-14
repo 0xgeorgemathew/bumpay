@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {Script, stdJson, console} from "forge-std/Script.sol";
+import {Script, console} from "forge-std/Script.sol";
 
 /// @notice Base contract for ScaffoldETH-style deployments
 /// @dev Provides deployment tracking and export functionality
 contract DeployHelpers is Script {
-    using stdJson for string;
-
     /// @notice Tracks deployed contracts for export
     struct Deployment {
         string name;
@@ -36,23 +34,28 @@ contract DeployHelpers is Script {
     /// @notice Exports deployments to JSON file
     function _exportDeployments() internal {
         string memory chainId = vm.toString(block.chainid);
-        string memory json = "deployments";
+        string memory finalJson = "{";
 
         for (uint256 i = 0; i < deployments.length; i++) {
-            json.serialize(
+            if (i > 0) {
+                finalJson = string.concat(finalJson, ",");
+            }
+
+            finalJson = string.concat(
+                finalJson,
+                "\"",
                 deployments[i].name,
-                abi.encodePacked(
-                    '{"address": "',
-                    vm.toString(deployments[i].addr),
-                    '"}'
-                )
+                "\":{\"address\":\"",
+                vm.toString(deployments[i].addr),
+                "\"}"
             );
         }
 
-        string memory finalJson = json.serialize(
-            "chainId",
-            chainId
-        );
+        if (deployments.length > 0) {
+            finalJson = string.concat(finalJson, ",");
+        }
+
+        finalJson = string.concat(finalJson, "\"chainId\":\"", chainId, "\"}");
 
         string memory path = string.concat(
             "deployments/",
