@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, StyleSheet, Pressable, Linking } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
@@ -6,6 +6,7 @@ import { COLORS, BORDER_THICK } from "../constants/theme";
 import { formatPaymentAmount } from "../lib/payments/tracking";
 import { playDisconnectBeepAsync, playPaymentSuccessSoundAsync } from "../lib/audio/feedback";
 import { announcePaymentReceivedAsync } from "../lib/audio/announce";
+import { getEnsClaimStatus } from "../lib/ens/service";
 import { useOperationalWallet } from "../lib/wallet";
 import { useTransactions } from "../lib/transaction-context";
 
@@ -15,6 +16,14 @@ function shortAddress(address?: string) {
   }
 
   return `${address.slice(0, 10)}...${address.slice(-8)}`;
+}
+
+function getDisplayName(label?: string | null, address?: string) {
+  if (label && label.trim().length > 0) {
+    return label;
+  }
+
+  return shortAddress(address);
 }
 
 // PartyBox component for clear FROM/TO display
@@ -37,9 +46,8 @@ function PartyBox({
       <View style={[styles.partyBox, { backgroundColor: bgColor }]}>
         <Text style={styles.partyLabel}>{label}</Text>
         <Text style={styles.partyName}>{isYou ? "YOU" : name}</Text>
-        {!isYou && address && (
-          <Text style={styles.partyAddress}>{shortAddress(address)}</Text>
-        )}
+        {isYou ? <Text style={styles.partyEnsName}>{name}</Text> : null}
+        {address ? <Text style={styles.partyAddress}>{shortAddress(address)}</Text> : null}
       </View>
     </View>
   );
@@ -75,10 +83,12 @@ export default function PaymentSuccessScreen() {
 
   const isReceiver = params.role === "receiver";
   const backgroundColor = isReceiver ? COLORS.green400 : COLORS.primaryBlue;
+  const [resolvedFromLabel, setResolvedFromLabel] = useState<string | null>(params.fromLabel ?? null);
+  const [resolvedToLabel, setResolvedToLabel] = useState<string | null>(params.toLabel ?? null);
 
   // Determine party details for FROM → TO display
-  const fromName = params.fromLabel ?? "Unknown";
-  const toName = params.toLabel ?? "Unknown";
+  const fromName = getDisplayName(resolvedFromLabel, params.from);
+  const toName = getDisplayName(resolvedToLabel, params.to);
 
   // Color coding: when YOU are receiver → TO box is green, when YOU are payer → FROM box is yellow
   const highlightColor = isReceiver ? COLORS.green400 : COLORS.yellow400;
@@ -98,7 +108,59 @@ export default function PaymentSuccessScreen() {
         }
       })
       .catch(console.error);
-  }, []);
+  }, [formattedAmount, isReceiver, params.amount, params.tokenSymbol]);
+
+  useEffect(() => {
+    setResolvedFromLabel(params.fromLabel ?? null);
+  }, [params.fromLabel]);
+
+  useEffect(() => {
+    setResolvedToLabel(params.toLabel ?? null);
+  }, [params.toLabel]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const resolveLabels = async () => {
+      const jobs: Array<Promise<void>> = [];
+
+      if (!params.fromLabel && params.from) {
+        jobs.push(
+          getEnsClaimStatus(params.from as `0x${string}`)
+            .then((status) => {
+              if (!cancelled && status.fullName) {
+                setResolvedFromLabel(status.fullName);
+              }
+            })
+            .catch((error) => {
+              console.warn("Failed to resolve sender ENS on success page:", error);
+            }),
+        );
+      }
+
+      if (!params.toLabel && params.to) {
+        jobs.push(
+          getEnsClaimStatus(params.to as `0x${string}`)
+            .then((status) => {
+              if (!cancelled && status.fullName) {
+                setResolvedToLabel(status.fullName);
+              }
+            })
+            .catch((error) => {
+              console.warn("Failed to resolve receiver ENS on success page:", error);
+            }),
+        );
+      }
+
+      await Promise.all(jobs);
+    };
+
+    resolveLabels().catch(console.error);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [params.from, params.fromLabel, params.to, params.toLabel]);
 
   // Add to transaction history
   useEffect(() => {
@@ -127,8 +189,8 @@ export default function PaymentSuccessScreen() {
     const txTokenSymbol = params.tokenSymbol;
     const txChainName = params.chainName;
     const txTxHash = params.txHash as `0x${string}`;
-    const txFromLabel = params.fromLabel;
-    const txToLabel = params.toLabel;
+    const txFromLabel = resolvedFromLabel;
+    const txToLabel = resolvedToLabel;
 
     addTransaction({
       role: txRole,
@@ -148,10 +210,10 @@ export default function PaymentSuccessScreen() {
     params.amount,
     params.chainName,
     params.from,
-    params.fromLabel,
+    resolvedFromLabel,
     params.role,
     params.to,
-    params.toLabel,
+    resolvedToLabel,
     params.tokenSymbol,
     params.txHash,
     smartWalletAddress,
@@ -320,6 +382,14 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     color: COLORS.textPrimary,
     marginTop: 2,
+    textAlign: "center",
+  },
+  partyEnsName: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: COLORS.textMuted,
+    marginTop: 2,
+    textAlign: "center",
   },
   partyAddress: {
     fontSize: 10,
