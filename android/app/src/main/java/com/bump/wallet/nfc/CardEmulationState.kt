@@ -17,6 +17,8 @@ object CardEmulationState {
     private const val KEY_PAYMENT_INTENT_PAYLOAD = "payment_intent_payload"
     private const val KEY_IS_READY = "is_ready"
     private const val KEY_ERROR_MESSAGE = "error_message"
+    private const val KEY_MERCHANT_MODE = "merchant_mode"
+    private const val KEY_PAYMENT_AUTHORIZATION_PAYLOAD = "payment_authorization_payload"
 
     private fun getPrefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -150,5 +152,31 @@ object CardEmulationState {
         }
 
         return payload.toString().toByteArray(Charsets.UTF_8) + byteArrayOf(0x6A.toByte(), 0x80.toByte())
+    }
+
+    // ============ Merchant Mode Support ============
+
+    fun setMerchantMode(context: Context, enabled: Boolean) {
+        getPrefs(context).edit().putBoolean(KEY_MERCHANT_MODE, enabled).apply()
+    }
+
+    fun isMerchantMode(context: Context): Boolean {
+        return getPrefs(context).getBoolean(KEY_MERCHANT_MODE, false)
+    }
+
+    fun setPaymentAuthorizationPayload(context: Context, payload: String) {
+        getPrefs(context).edit().putString(KEY_PAYMENT_AUTHORIZATION_PAYLOAD, payload).apply()
+    }
+
+    fun getPaymentAuthorizationPayload(context: Context): String? {
+        return getPrefs(context).getString(KEY_PAYMENT_AUTHORIZATION_PAYLOAD, null)
+    }
+
+    fun hasPaymentAuthorization(context: Context): Boolean {
+        return !getPrefs(context).getString(KEY_PAYMENT_AUTHORIZATION_PAYLOAD, "").isNullOrEmpty()
+    }
+
+    fun clearPaymentAuthorizationPayload(context: Context) {
+        getPrefs(context).edit().remove(KEY_PAYMENT_AUTHORIZATION_PAYLOAD).apply()
     }
 }

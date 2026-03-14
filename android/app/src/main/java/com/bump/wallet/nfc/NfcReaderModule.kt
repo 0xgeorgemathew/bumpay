@@ -53,6 +53,17 @@ class NfcReaderModule(reactContext: ReactApplicationContext) :
         sendIntent(iso, payload, promise)
     }
 
+    @ReactMethod
+    fun sendMerchantAuthorization(payload: String, promise: Promise) {
+        val iso = activeIsoDep
+        if (iso == null || !iso.isConnected) {
+            promise.reject("NO_ACTIVE_TAG", "No active NFC session available")
+            return
+        }
+
+        sendAuthorization(iso, payload, promise)
+    }
+
     override fun onTagDiscovered(tag: Tag?) {
         val iso = tag?.let { IsoDep.get(it) } ?: return
 
@@ -109,7 +120,7 @@ class NfcReaderModule(reactContext: ReactApplicationContext) :
         }
 
         val kind = decodeResponseKind(responseJson)
-        if (kind != "PAYMENT_REQUEST") {
+        if (kind != "PAYMENT_REQUEST" && kind != "MERCHANT_PAYMENT_REQUEST") {
             emitReaderError("Unexpected response: $kind")
             return null
         }
@@ -143,6 +154,25 @@ class NfcReaderModule(reactContext: ReactApplicationContext) :
             promise.resolve("Payment intent sent")
         } catch (e: Exception) {
             promise.reject("INTENT_FAILED", "Failed to send payment intent: ${e.message}")
+        } finally {
+            clearActiveSession()
+        }
+    }
+
+    private fun sendAuthorization(iso: IsoDep, payload: String, promise: Promise) {
+        try {
+            val response = iso.transceive(payload.toByteArray(Charsets.UTF_8))
+            if (!validateSuccessResponse(response)) {
+                val statusWord = extractStatusWord(response) ?: "Unknown"
+                val responseMessage = extractErrorMessage(response)
+                val suffix = if (responseMessage != null) ": $responseMessage" else ""
+                promise.reject("AUTH_FAILED", "Authorization rejected: $statusWord$suffix")
+                return
+            }
+
+            promise.resolve("Authorization sent")
+        } catch (e: Exception) {
+            promise.reject("AUTH_FAILED", "Failed to send authorization: ${e.message}")
         } finally {
             clearActiveSession()
         }
@@ -237,6 +267,7 @@ class NfcReaderModule(reactContext: ReactApplicationContext) :
     private fun decodeResponseKind(json: JSONObject): String {
         return when (json.optString("kind", json.optString("k", ""))) {
             "R", "PAYMENT_REQUEST" -> "PAYMENT_REQUEST"
+            "M", "MERCHANT_PAYMENT_REQUEST" -> "MERCHANT_PAYMENT_REQUEST"
             "E", "ERROR" -> "ERROR"
             else -> ""
         }

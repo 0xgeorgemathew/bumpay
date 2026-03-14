@@ -32,6 +32,8 @@ class CardEmulationModule(reactContext: ReactApplicationContext) :
         putBoolean("hasPaymentIntent", CardEmulationState.hasPaymentIntent(reactApplicationContext))
         putString("errorMessage", CardEmulationState.getError(reactApplicationContext))
         putString("lastCommand", CardEmulationState.getLastCommand(reactApplicationContext))
+        putBoolean("isMerchantMode", CardEmulationState.isMerchantMode(reactApplicationContext))
+        putBoolean("hasPaymentAuthorization", CardEmulationState.hasPaymentAuthorization(reactApplicationContext))
     }
 
     private fun emitCurrentState() {
@@ -86,6 +88,25 @@ class CardEmulationModule(reactContext: ReactApplicationContext) :
     fun clearPaymentIntent(promise: Promise) {
         CardEmulationState.clearPaymentIntentPayload(reactApplicationContext)
         promise.resolve("Payment intent cleared")
+    }
+
+    // ============ Merchant Mode Methods ============
+
+    @ReactMethod
+    fun setMerchantMode(enabled: Boolean, promise: Promise) {
+        CardEmulationState.setMerchantMode(reactApplicationContext, enabled)
+        promise.resolve("Merchant mode set: $enabled")
+    }
+
+    @ReactMethod
+    fun getPaymentAuthorization(promise: Promise) {
+        promise.resolve(CardEmulationState.getPaymentAuthorizationPayload(reactApplicationContext))
+    }
+
+    @ReactMethod
+    fun clearPaymentAuthorization(promise: Promise) {
+        CardEmulationState.clearPaymentAuthorizationPayload(reactApplicationContext)
+        promise.resolve("Payment authorization cleared")
     }
 
     @ReactMethod

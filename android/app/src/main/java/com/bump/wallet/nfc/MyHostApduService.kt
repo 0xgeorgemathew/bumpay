@@ -21,7 +21,8 @@ class MyHostApduService : HostApduService() {
 
     private enum class CommandKind {
         GET_PAYMENT_REQUEST,
-        PAYMENT_INTENT
+        PAYMENT_INTENT,
+        MERCHANT_PAYMENT_AUTHORIZATION
     }
 
     private data class DecodedCommand(
@@ -46,6 +47,7 @@ class MyHostApduService : HostApduService() {
             return when (command.kind) {
                 CommandKind.GET_PAYMENT_REQUEST -> handleGetPaymentRequest(command.payload)
                 CommandKind.PAYMENT_INTENT -> handlePaymentIntent(command.payload)
+                CommandKind.MERCHANT_PAYMENT_AUTHORIZATION -> handleMerchantPaymentAuthorization(command.payload)
             }
         }
 
@@ -58,6 +60,7 @@ class MyHostApduService : HostApduService() {
             when (decodeCommandKind(json)) {
                 CommandKind.GET_PAYMENT_REQUEST -> DecodedCommand(CommandKind.GET_PAYMENT_REQUEST, json)
                 CommandKind.PAYMENT_INTENT -> DecodedCommand(CommandKind.PAYMENT_INTENT, json)
+                CommandKind.MERCHANT_PAYMENT_AUTHORIZATION -> DecodedCommand(CommandKind.MERCHANT_PAYMENT_AUTHORIZATION, json)
                 null -> null
             }
         } catch (e: JSONException) {
@@ -70,6 +73,7 @@ class MyHostApduService : HostApduService() {
         return when (json.optString("kind", json.optString("k", ""))) {
             "Q", "GET_PAYMENT_REQUEST" -> CommandKind.GET_PAYMENT_REQUEST
             "I", "PAYMENT_INTENT" -> CommandKind.PAYMENT_INTENT
+            "A", "MERCHANT_PAYMENT_AUTHORIZATION" -> CommandKind.MERCHANT_PAYMENT_AUTHORIZATION
             else -> null
         }
     }
@@ -119,6 +123,24 @@ class MyHostApduService : HostApduService() {
 
         CardEmulationState.setPaymentIntentPayload(applicationContext, json.toString())
         CardEmulationState.recordLastCommand(applicationContext, "PAYMENT_INTENT")
+        return CardEmulationState.buildAckResponse(applicationContext)
+    }
+
+    private fun handleMerchantPaymentAuthorization(json: JSONObject): ByteArray {
+        // Merchant mode: we're the merchant receiving authorization from customer
+        if (!CardEmulationState.isMerchantMode(applicationContext)) {
+            return CardEmulationState.buildErrorResponse(applicationContext, "Not in merchant mode")
+        }
+
+        if (!CardEmulationState.hasPublishedPaymentRequest(applicationContext)) {
+            return CardEmulationState.buildErrorResponse(applicationContext, "No active merchant request")
+        }
+
+        validateSession(extractSessionId(json), requirePresent = true)?.let { return it }
+
+        // Store the authorization for the merchant to claim payment
+        CardEmulationState.setPaymentAuthorizationPayload(applicationContext, json.toString())
+        CardEmulationState.recordLastCommand(applicationContext, "MERCHANT_PAYMENT_AUTHORIZATION")
         return CardEmulationState.buildAckResponse(applicationContext)
     }
 
