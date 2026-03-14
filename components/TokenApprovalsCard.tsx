@@ -1,36 +1,52 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { View, Text, StyleSheet, Pressable } from "react-native";
+import { View, Text, StyleSheet, Pressable, ActivityIndicator } from "react-native";
 import * as Haptics from "expo-haptics";
 import type { Address } from "viem";
 import { useOperationalWallet } from "../lib/wallet";
 import { getPaymentTrackingPollingClient } from "../lib/payments/payment-tracking-client";
 import { TOKENS, VERIFIER_ADDRESS } from "../lib/blockchain/contracts";
-import { COLORS, BORDER_THICK } from "../constants/theme";
+import { COLORS, BORDER_THICK, SHADOW } from "../constants/theme";
+import { NeoSlider, type SliderStep } from "./NeoSlider";
+import { ApprovalConfirmModal } from "./ApprovalConfirmModal";
 
 const MAX_ALLOWANCE = (1n << 256n) - 1n;
 
+// Slider steps: 0, 10, 50, 100, 500, 1K, ∞
+const APPROVAL_STEPS: Array<SliderStep> = [
+  { value: 0n, label: "0" },
+  { value: 10n * 10n ** 6n, label: "10" },
+  { value: 50n * 10n ** 6n, label: "50" },
+  { value: 100n * 10n ** 6n, label: "100" },
+  { value: 500n * 10n ** 6n, label: "500" },
+  { value: 1000n * 10n ** 6n, label: "1K" },
+  { value: MAX_ALLOWANCE, label: "∞" },
+];
+
 type AllowanceMap = Record<string, bigint>;
 
-function formatAddress(address: Address) {
-  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+function findNearestStep(allowance: bigint): bigint {
+  // Find the closest step to the current allowance
+  let nearest = APPROVAL_STEPS[0].value;
+  let minDiff = allowance > nearest ? allowance - nearest : nearest - allowance;
+
+  for (const step of APPROVAL_STEPS) {
+    const diff = allowance > step.value ? allowance - step.value : step.value - allowance;
+    if (diff < minDiff) {
+      minDiff = diff;
+      nearest = step.value;
+    }
+  }
+
+  return nearest;
 }
 
-function formatAllowance(amount: bigint, decimals: number) {
-  if (amount === 0n) {
-    return "NOT APPROVED";
-  }
+function getStepLabel(value: bigint): string {
+  const step = APPROVAL_STEPS.find((s) => s.value === value);
+  return step?.label ?? "0";
+}
 
-  if (amount === MAX_ALLOWANCE) {
-    return "MAX APPROVED";
-  }
-
-  const whole = amount / 10n ** BigInt(decimals);
-  if (whole >= 1_000_000n) {
-    return `${whole.toString()} UNITS`;
-  }
-
-  const value = Number(amount) / 10 ** decimals;
-  return `${value.toFixed(2)} APPROVED`;
+function isUnlimited(value: bigint): boolean {
+  return value === MAX_ALLOWANCE;
 }
 
 export function TokenApprovalsCard() {
@@ -43,13 +59,24 @@ export function TokenApprovalsCard() {
 
   const tokens = useMemo(() => Object.values(TOKENS), []);
   const [allowances, setAllowances] = useState<AllowanceMap>({});
+  const [sliderValues, setSliderValues] = useState<AllowanceMap>({});
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [refreshPressed, setRefreshPressed] = useState(false);
   const [pendingToken, setPendingToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Modal state
+  const [modalVisible, setModalVisible] = useState(false);
+  const [pendingApproval, setPendingApproval] = useState<{
+    tokenAddress: Address;
+    tokenSymbol: string;
+    amount: bigint;
+  } | null>(null);
 
   const refreshAllowances = useCallback(async () => {
     if (!smartWalletAddress || !isReady) {
       setAllowances({});
+      setSliderValues({});
       return;
     }
 
@@ -69,7 +96,15 @@ export function TokenApprovalsCard() {
         }),
       );
 
-      setAllowances(Object.fromEntries(next));
+      const allowanceMap = Object.fromEntries(next);
+      setAllowances(allowanceMap);
+
+      // Initialize slider values to nearest step
+      const sliderMap: AllowanceMap = {};
+      for (const [addr, allowance] of Object.entries(allowanceMap)) {
+        sliderMap[addr] = findNearestStep(allowance);
+      }
+      setSliderValues(sliderMap);
     } catch (allowanceError) {
       setError(
         allowanceError instanceof Error
@@ -85,73 +120,102 @@ export function TokenApprovalsCard() {
     refreshAllowances().catch(console.error);
   }, [refreshAllowances]);
 
-  const handleSetAllowance = useCallback(
-    async (tokenAddress: Address, amount: bigint) => {
-      if (!smartWalletAddress || !isReady) {
-        return;
-      }
-
-      const key = tokenAddress.toLowerCase();
-      setPendingToken(key);
-      setError(null);
-      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-
-      try {
-        const txHash = await setAllowance(tokenAddress, VERIFIER_ADDRESS, amount);
-        if (!txHash) {
-          throw new Error("Allowance transaction was not submitted");
-        }
-
-        const receipt = await getPaymentTrackingPollingClient().waitForTransactionReceipt({
-          hash: txHash,
-        });
-
-        if (receipt.status !== "success") {
-          throw new Error("Allowance transaction reverted");
-        }
-
-        await refreshAllowances();
-      } catch (setErrorState) {
-        setError(
-          setErrorState instanceof Error
-            ? setErrorState.message
-            : "Failed to update allowance",
-        );
-      } finally {
-        setPendingToken(null);
-      }
+  const handleSliderChange = useCallback(
+    (tokenAddress: string, value: bigint) => {
+      setSliderValues((prev) => ({
+        ...prev,
+        [tokenAddress.toLowerCase()]: value,
+      }));
     },
-    [isReady, refreshAllowances, setAllowance, smartWalletAddress],
+    [],
+  );
+
+  const handleConfirmApproval = useCallback(async () => {
+    if (!pendingApproval || !smartWalletAddress || !isReady) {
+      return;
+    }
+
+    const { tokenAddress, amount } = pendingApproval;
+    const key = tokenAddress.toLowerCase();
+    setPendingToken(key);
+    setError(null);
+    setModalVisible(false);
+
+    try {
+      const txHash = await setAllowance(tokenAddress, VERIFIER_ADDRESS, amount);
+      if (!txHash) {
+        throw new Error("Allowance transaction was not submitted");
+      }
+
+      const receipt = await getPaymentTrackingPollingClient().waitForTransactionReceipt({
+        hash: txHash,
+      });
+
+      if (receipt.status !== "success") {
+        throw new Error("Allowance transaction reverted");
+      }
+
+      await refreshAllowances();
+    } catch (setErrorState) {
+      setError(
+        setErrorState instanceof Error
+          ? setErrorState.message
+          : "Failed to update allowance",
+      );
+    } finally {
+      setPendingToken(null);
+      setPendingApproval(null);
+    }
+  }, [isReady, pendingApproval, refreshAllowances, setAllowance, smartWalletAddress]);
+
+  const handleCancelModal = useCallback(() => {
+    setModalVisible(false);
+    // Reset slider to current allowance
+    if (pendingApproval) {
+      const key = pendingApproval.tokenAddress.toLowerCase();
+      const currentAllowance = allowances[key] ?? 0n;
+      setSliderValues((prev) => ({
+        ...prev,
+        [key]: findNearestStep(currentAllowance),
+      }));
+    }
+    setPendingApproval(null);
+  }, [allowances, pendingApproval]);
+
+  const handleTickPress = useCallback(
+    (token: { address: Address; symbol: string }, amount: bigint) => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+      setPendingApproval({
+        tokenAddress: token.address,
+        tokenSymbol: token.symbol,
+        amount,
+      });
+      setModalVisible(true);
+    },
+    [],
   );
 
   return (
     <View style={styles.cardShadow}>
       <View style={styles.card}>
         <View style={styles.header}>
-          <View>
-            <Text style={styles.label}>TOKEN APPROVALS</Text>
-            <Text style={styles.description}>
-              Pre-approve the verifier used for merchant claims.
-            </Text>
-          </View>
+          <Text style={styles.label}>LIMITS</Text>
           <Pressable
             onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
               refreshAllowances().catch(console.error);
             }}
+            onPressIn={() => setRefreshPressed(true)}
+            onPressOut={() => setRefreshPressed(false)}
             disabled={isRefreshing || !isReady}
             style={[
               styles.refreshButton,
+              !(isRefreshing || !isReady) && refreshPressed && styles.refreshButtonPressed,
               (isRefreshing || !isReady) && styles.buttonDisabled,
             ]}
           >
             <Text style={styles.refreshText}>{isRefreshing ? "SYNCING" : "REFRESH"}</Text>
           </Pressable>
-        </View>
-
-        <View style={styles.verifierBox}>
-          <Text style={styles.verifierLabel}>VERIFIER</Text>
-          <Text style={styles.verifierValue}>{formatAddress(VERIFIER_ADDRESS)}</Text>
         </View>
 
         {!isReady || !smartWalletAddress ? (
@@ -162,49 +226,56 @@ export function TokenApprovalsCard() {
           </View>
         ) : null}
 
-        {tokens.map((token) => {
-          const key = token.address.toLowerCase();
-          const allowance = allowances[key] ?? 0n;
-          const isPending = pendingToken === key;
+        <View style={styles.tokenList}>
+          {tokens.map((token, index) => {
+            const key = token.address.toLowerCase();
+            const allowance = allowances[key] ?? 0n;
+            const sliderValue = sliderValues[key] ?? 0n;
+            const currentStep = findNearestStep(allowance);
+            const hasChanges = sliderValue !== currentStep;
+            const isPending = pendingToken === key;
 
-          return (
-            <View key={token.address} style={styles.tokenRow}>
-              <View style={styles.tokenMeta}>
+            return (
+              <View
+                key={token.address}
+                style={[
+                  styles.tokenRow,
+                  index < tokens.length - 1 && styles.tokenRowBorder,
+                ]}
+              >
                 <Text style={styles.tokenSymbol}>{token.symbol}</Text>
-                <Text style={styles.tokenName}>{token.name}</Text>
-                <Text style={styles.allowanceText}>
-                  {isReady ? formatAllowance(allowance, token.decimals) : "WALLET REQUIRED"}
+
+                <View style={styles.sliderContainer}>
+                  <NeoSlider
+                    steps={APPROVAL_STEPS}
+                    value={sliderValue}
+                    onChange={(value) => handleSliderChange(key, value)}
+                    disabled={!isReady || isPending}
+                  />
+                </View>
+
+                <Text style={styles.valueText}>
+                  {isUnlimited(sliderValue) ? "∞" : getStepLabel(sliderValue)}
                 </Text>
-              </View>
 
-              <View style={styles.tokenActions}>
-                <Pressable
-                  onPress={() => handleSetAllowance(token.address, MAX_ALLOWANCE)}
-                  disabled={!isReady || isPending}
-                  style={[
-                    styles.actionButton,
-                    styles.approveButton,
-                    (!isReady || isPending) && styles.buttonDisabled,
-                  ]}
-                >
-                  <Text style={styles.actionText}>{isPending ? "PENDING" : "APPROVE MAX"}</Text>
-                </Pressable>
+                {hasChanges && !isPending && (
+                  <Pressable
+                    style={styles.confirmTick}
+                    onPress={() => handleTickPress(token, sliderValue)}
+                  >
+                    <Text style={styles.tickText}>✓</Text>
+                  </Pressable>
+                )}
 
-                <Pressable
-                  onPress={() => handleSetAllowance(token.address, 0n)}
-                  disabled={!isReady || isPending || allowance === 0n}
-                  style={[
-                    styles.actionButton,
-                    styles.revokeButton,
-                    (!isReady || isPending || allowance === 0n) && styles.buttonDisabled,
-                  ]}
-                >
-                  <Text style={[styles.actionText, styles.revokeText]}>REVOKE</Text>
-                </Pressable>
+                {isPending && (
+                  <View style={styles.pendingIndicator}>
+                    <ActivityIndicator size="small" color={COLORS.textPrimary} />
+                  </View>
+                )}
               </View>
-            </View>
-          );
-        })}
+            );
+          })}
+        </View>
 
         {error ? (
           <View style={styles.errorBox}>
@@ -212,6 +283,16 @@ export function TokenApprovalsCard() {
           </View>
         ) : null}
       </View>
+
+      <ApprovalConfirmModal
+        visible={modalVisible}
+        tokenSymbol={pendingApproval?.tokenSymbol ?? ""}
+        amountLabel={getStepLabel(pendingApproval?.amount ?? 0n)}
+        isUnlimited={isUnlimited(pendingApproval?.amount ?? 0n)}
+        onConfirm={handleConfirmApproval}
+        onCancel={handleCancelModal}
+        isLoading={pendingToken !== null}
+      />
     </View>
   );
 }
@@ -225,12 +306,13 @@ const styles = StyleSheet.create({
     borderWidth: BORDER_THICK.width,
     borderColor: COLORS.border,
     padding: 16,
-    gap: 16,
+    gap: 12,
     transform: [{ translateX: -8 }, { translateY: -8 }],
   },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
+    alignItems: "center",
     gap: 12,
   },
   label: {
@@ -239,13 +321,6 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
     color: COLORS.textPrimary,
   },
-  description: {
-    marginTop: 6,
-    fontSize: 13,
-    fontWeight: "700",
-    color: COLORS.textMuted,
-    lineHeight: 18,
-  },
   refreshButton: {
     alignSelf: "flex-start",
     backgroundColor: COLORS.yellow400,
@@ -253,29 +328,24 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     paddingHorizontal: 12,
     paddingVertical: 10,
+    shadowColor: COLORS.border,
+    shadowOffset: SHADOW.sm.offset,
+    shadowOpacity: SHADOW.sm.opacity,
+    shadowRadius: SHADOW.sm.radius,
+    elevation: SHADOW.sm.elevation,
+  },
+  refreshButtonPressed: {
+    transform: [
+      { translateX: SHADOW.sm.offset.width },
+      { translateY: SHADOW.sm.offset.height },
+    ],
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 0,
   },
   refreshText: {
     fontSize: 10,
     fontWeight: "900",
     letterSpacing: 1,
-    color: COLORS.textPrimary,
-  },
-  verifierBox: {
-    backgroundColor: COLORS.backgroundLight,
-    borderWidth: BORDER_THICK.width,
-    borderColor: COLORS.border,
-    padding: 12,
-  },
-  verifierLabel: {
-    fontSize: 10,
-    fontWeight: "900",
-    letterSpacing: 1.5,
-    color: COLORS.textMuted,
-    marginBottom: 4,
-  },
-  verifierValue: {
-    fontSize: 14,
-    fontWeight: "900",
     color: COLORS.textPrimary,
   },
   noticeBox: {
@@ -290,57 +360,59 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     lineHeight: 18,
   },
-  tokenRow: {
-    gap: 12,
-    borderWidth: BORDER_THICK.width,
-    borderColor: COLORS.border,
-    padding: 12,
-    backgroundColor: COLORS.backgroundLight,
+  tokenList: {
+    gap: 0,
   },
-  tokenMeta: {
-    gap: 4,
+  tokenRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 12,
+  },
+  tokenRowBorder: {
+    borderBottomWidth: BORDER_THICK.width,
+    borderBottomColor: COLORS.border,
   },
   tokenSymbol: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: COLORS.textPrimary,
+    minWidth: 50,
+  },
+  sliderContainer: {
+    flex: 1,
+  },
+  valueText: {
+    fontSize: 18,
+    fontWeight: "900",
+    color: COLORS.textPrimary,
+    minWidth: 40,
+    textAlign: "right",
+  },
+  confirmTick: {
+    width: 36,
+    height: 36,
+    backgroundColor: COLORS.green400,
+    borderWidth: BORDER_THICK.width,
+    borderColor: COLORS.border,
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: COLORS.border,
+    shadowOffset: SHADOW.sm.offset,
+    shadowOpacity: SHADOW.sm.opacity,
+    shadowRadius: SHADOW.sm.radius,
+    elevation: SHADOW.sm.elevation,
+  },
+  tickText: {
     fontSize: 20,
     fontWeight: "900",
     color: COLORS.textPrimary,
   },
-  tokenName: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: COLORS.textMuted,
-  },
-  allowanceText: {
-    fontSize: 12,
-    fontWeight: "900",
-    letterSpacing: 1,
-    color: COLORS.textPrimary,
-  },
-  tokenActions: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  actionButton: {
-    flex: 1,
-    borderWidth: BORDER_THICK.width,
-    borderColor: COLORS.border,
-    paddingVertical: 12,
+  pendingIndicator: {
+    width: 36,
+    height: 36,
+    justifyContent: "center",
     alignItems: "center",
-  },
-  approveButton: {
-    backgroundColor: COLORS.green400,
-  },
-  revokeButton: {
-    backgroundColor: COLORS.surface,
-  },
-  actionText: {
-    fontSize: 11,
-    fontWeight: "900",
-    letterSpacing: 1,
-    color: COLORS.textPrimary,
-  },
-  revokeText: {
-    color: COLORS.textPrimary,
   },
   buttonDisabled: {
     opacity: 0.45,
