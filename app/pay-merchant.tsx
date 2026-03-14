@@ -11,8 +11,8 @@ import * as Haptics from "expo-haptics";
 import { usePrivy } from "@privy-io/expo";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { formatUnits } from "viem";
-import type { Hex } from "viem";
 import { COLORS, BORDER_THICK } from "../constants/theme";
+import { getEnsClaimStatus } from "../lib/ens/service";
 import { useOperationalWallet } from "../lib/wallet";
 import { playNfcCompleteSound } from "../lib/audio/feedback";
 import { NfcReader, NfcReaderEvents, type MerchantPaymentRequest } from "../lib/nfc/reader";
@@ -82,6 +82,14 @@ function NfcIcon({ size = 48, color = "#fff" }: { size?: number; color?: string 
   return <MaterialCommunityIcons name="nfc" size={size} color={color} />;
 }
 
+function shortAddress(address?: string | null): string {
+  if (!address) {
+    return "UNKNOWN";
+  }
+
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
 const SHADOW_OFFSET = { width: 8, height: 8 };
 
 export default function PayMerchantScreen() {
@@ -101,8 +109,9 @@ export default function PayMerchantScreen() {
   const [screenState, setScreenState] = useState<PayMerchantState>("idle");
   const [errorType, setErrorType] = useState<PayMerchantError | undefined>();
   const [merchantRequest, setMerchantRequest] = useState<MerchantPaymentRequest | null>(null);
-  const [signature, setSignature] = useState<Hex | null>(null);
   const [readerCycle, setReaderCycle] = useState(0);
+  const [payerEnsName, setPayerEnsName] = useState<string | null>(null);
+  const [resolvedMerchantEnsName, setResolvedMerchantEnsName] = useState<string | null>(null);
 
   const isProcessingRef = useRef(false);
 
@@ -121,7 +130,193 @@ export default function PayMerchantScreen() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!smartWalletAddress) {
+      setPayerEnsName(null);
+      return;
+    }
+
+    getEnsClaimStatus(smartWalletAddress)
+      .then((status) => {
+        setPayerEnsName(status.fullName);
+      })
+      .catch((error) => {
+        console.warn("Failed to load payer ENS:", error);
+        setPayerEnsName(null);
+      });
+  }, [smartWalletAddress]);
+
   const canScan = walletReady && !!smartWalletAddress;
+
+  const authorizePayment = useCallback(async (request: MerchantPaymentRequest) => {
+    if (!smartWalletAddress || !walletReady) {
+      return;
+    }
+
+    try {
+      const balances = await refreshBalances();
+      const availableBalance =
+        request.tokenAddress.toLowerCase() === TOKEN_ADDRESS.toLowerCase()
+          ? balances?.usdcBalance
+          : request.tokenAddress.toLowerCase() === USDT_ADDRESS.toLowerCase()
+            ? balances?.usdtBalance
+            : null;
+
+      if (availableBalance == null || availableBalance < request.amount) {
+        setScreenState("error");
+        setErrorType("insufficient_balance");
+        await NfcReader.stopReader();
+        return;
+      }
+
+      // Check allowance
+      setScreenState("checking_allowance");
+
+      // The verifier contract needs approval to transfer tokens
+      const allowance = await checkAllowance(
+        request.tokenAddress,
+        smartWalletAddress,
+        VERIFIER_ADDRESS,
+      );
+
+      if (allowance < request.amount) {
+        setScreenState("approving");
+        const approveTx = await ensureAllowance(
+          request.tokenAddress,
+          VERIFIER_ADDRESS,
+          request.amount,
+        );
+        if (approveTx === null && allowance < request.amount) {
+          setScreenState("error");
+          setErrorType("approval_failed");
+          await NfcReader.stopReader();
+          return;
+        }
+
+        if (approveTx) {
+          const receipt = await getPaymentTrackingPollingClient().waitForTransactionReceipt({
+            hash: approveTx,
+          });
+          if (receipt.status !== "success") {
+            setScreenState("error");
+            setErrorType("approval_failed");
+            await NfcReader.stopReader();
+            return;
+          }
+        }
+      }
+
+      // Sign the authorization
+      setScreenState("signing");
+
+      const authorization: PaymentAuthorization = {
+        token: request.tokenAddress,
+        merchant: request.merchantAddress,
+        customer: smartWalletAddress,
+        amount: request.amount,
+        nonce: request.nonce,
+        deadline: BigInt(request.deadline),
+      };
+
+      const sig = await signTypedData(createPaymentAuthorizationTypedData(authorization));
+
+      // Send authorization to merchant via NFC
+      setScreenState("sending");
+
+      const authMessage = buildMerchantAuthorizationMessage(
+        request.sessionId,
+        request.requestId,
+        smartWalletAddress,
+        sig,
+      );
+
+      await NfcReader.sendMerchantAuthorization(authMessage);
+      await NfcReader.stopReader();
+      await NfcReader.clearScanSession();
+      await playNfcCompleteSound();
+
+      setScreenState("success");
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (err) {
+      console.error("Payment authorization failed:", err);
+      const errorMessage = err instanceof Error ? err.message : "Unknown error";
+
+      if (errorMessage.includes("sign")) {
+        setErrorType("signing_failed");
+      } else {
+        setErrorType("send_failed");
+      }
+      setScreenState("error");
+      await NfcReader.stopReader().catch(() => undefined);
+    }
+  }, [
+    refreshBalances,
+    smartWalletAddress,
+    walletReady,
+    checkAllowance,
+    ensureAllowance,
+    signTypedData,
+  ]);
+
+  const handleMerchantRequest = useCallback(
+    async (request: MerchantPaymentRequest) => {
+      if (isProcessingRef.current) {
+        return;
+      }
+
+      isProcessingRef.current = true;
+
+      try {
+        if (request.chainId !== CHAIN_ID) {
+          setScreenState("error");
+          setErrorType("wrong_chain");
+          await NfcReader.stopReader();
+          return;
+        }
+
+        if (request.verifyingContract.toLowerCase() !== VERIFIER_ADDRESS.toLowerCase()) {
+          setScreenState("error");
+          setErrorType("wrong_verifier");
+          await NfcReader.stopReader();
+          return;
+        }
+
+        if (!isSupportedPaymentToken(request.tokenAddress)) {
+          setScreenState("error");
+          setErrorType("unsupported_token");
+          await NfcReader.stopReader();
+          return;
+        }
+
+        const now = Math.floor(Date.now() / 1000);
+        if (request.deadline <= now) {
+          setScreenState("error");
+          setErrorType("expired_request");
+          await NfcReader.stopReader();
+          return;
+        }
+
+        setMerchantRequest(request);
+        setResolvedMerchantEnsName(request.merchantName ?? null);
+        setScreenState("request_received");
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        if (!request.merchantName) {
+          getEnsClaimStatus(request.merchantAddress)
+            .then((status) => {
+              setResolvedMerchantEnsName(status.fullName);
+            })
+            .catch((error) => {
+              console.warn("Failed to load merchant ENS:", error);
+              setResolvedMerchantEnsName(null);
+            });
+        }
+        await authorizePayment(request);
+      } finally {
+        isProcessingRef.current = false;
+      }
+    },
+    [authorizePayment],
+  );
 
   // Set up NFC reader
   useEffect(() => {
@@ -134,7 +329,7 @@ export default function PayMerchantScreen() {
     setScreenState("scanning");
     setErrorType(undefined);
     setMerchantRequest(null);
-    setSignature(null);
+    setResolvedMerchantEnsName(null);
 
     NfcReader.clearScanSession()
       .then(() => NfcReader.setScanSession(""))
@@ -160,185 +355,7 @@ export default function PayMerchantScreen() {
       errorSubscription?.remove();
       NfcReader.stopReader().catch(() => undefined);
     };
-  }, [canScan, readerCycle, walletStatus]);
-
-  const handleMerchantRequest = useCallback(
-    async (request: MerchantPaymentRequest) => {
-      if (isProcessingRef.current) {
-        return;
-      }
-
-      isProcessingRef.current = true;
-
-      try {
-        // Validate chain
-        if (request.chainId !== CHAIN_ID) {
-          setScreenState("error");
-          setErrorType("wrong_chain");
-          await NfcReader.stopReader();
-          return;
-        }
-
-        if (request.verifyingContract.toLowerCase() !== VERIFIER_ADDRESS.toLowerCase()) {
-          setScreenState("error");
-          setErrorType("wrong_verifier");
-          await NfcReader.stopReader();
-          return;
-        }
-
-        if (!isSupportedPaymentToken(request.tokenAddress)) {
-          setScreenState("error");
-          setErrorType("unsupported_token");
-          await NfcReader.stopReader();
-          return;
-        }
-
-        // Check deadline
-        const now = Math.floor(Date.now() / 1000);
-        if (request.deadline <= now) {
-          setScreenState("error");
-          setErrorType("expired_request");
-          await NfcReader.stopReader();
-          return;
-        }
-
-        // Store the request and show confirmation UI
-        setMerchantRequest(request);
-        setScreenState("request_received");
-        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      } finally {
-        isProcessingRef.current = false;
-      }
-    },
-    [],
-  );
-
-  const handleConfirmPayment = useCallback(async () => {
-    if (!merchantRequest || !smartWalletAddress || !walletReady) {
-      return;
-    }
-
-    isProcessingRef.current = true;
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-
-    try {
-      const balances = await refreshBalances();
-      const availableBalance =
-        merchantRequest.tokenAddress.toLowerCase() === TOKEN_ADDRESS.toLowerCase()
-          ? balances?.usdcBalance
-          : merchantRequest.tokenAddress.toLowerCase() === USDT_ADDRESS.toLowerCase()
-            ? balances?.usdtBalance
-            : null;
-
-      if (availableBalance == null || availableBalance < merchantRequest.amount) {
-        setScreenState("error");
-        setErrorType("insufficient_balance");
-        await NfcReader.stopReader();
-        return;
-      }
-
-      // Check allowance
-      setScreenState("checking_allowance");
-
-      // The verifier contract needs approval to transfer tokens
-      const allowance = await checkAllowance(
-        merchantRequest.tokenAddress,
-        smartWalletAddress,
-        VERIFIER_ADDRESS,
-      );
-
-      if (allowance < merchantRequest.amount) {
-        // Need to approve
-        setScreenState("approving");
-        const approveTx = await ensureAllowance(
-          merchantRequest.tokenAddress,
-          VERIFIER_ADDRESS,
-          merchantRequest.amount,
-        );
-        if (approveTx === null && allowance < merchantRequest.amount) {
-          // Approval failed
-          setScreenState("error");
-          setErrorType("approval_failed");
-          await NfcReader.stopReader();
-          return;
-        }
-
-        if (approveTx) {
-          const receipt = await getPaymentTrackingPollingClient().waitForTransactionReceipt({
-            hash: approveTx,
-          });
-          if (receipt.status !== "success") {
-            setScreenState("error");
-            setErrorType("approval_failed");
-            await NfcReader.stopReader();
-            return;
-          }
-        }
-      }
-
-      // Sign the authorization
-      setScreenState("signing");
-
-      const authorization: PaymentAuthorization = {
-        token: merchantRequest.tokenAddress,
-        merchant: merchantRequest.merchantAddress,
-        customer: smartWalletAddress,
-        amount: merchantRequest.amount,
-        nonce: merchantRequest.nonce,
-        deadline: BigInt(merchantRequest.deadline),
-      };
-
-      const sig = await signTypedData(createPaymentAuthorizationTypedData(authorization));
-      setSignature(sig);
-
-      // Send authorization to merchant via NFC
-      setScreenState("sending");
-
-      const authMessage = buildMerchantAuthorizationMessage(
-        merchantRequest.sessionId,
-        merchantRequest.requestId,
-        smartWalletAddress,
-        sig,
-      );
-
-      await NfcReader.sendMerchantAuthorization(authMessage);
-      await playNfcCompleteSound();
-
-      setScreenState("success");
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch (err) {
-      console.error("Payment authorization failed:", err);
-      const errorMessage = err instanceof Error ? err.message : "Unknown error";
-
-      if (errorMessage.includes("sign")) {
-        setErrorType("signing_failed");
-      } else {
-        setErrorType("send_failed");
-      }
-      setScreenState("error");
-    } finally {
-      isProcessingRef.current = false;
-    }
-  }, [
-    merchantRequest,
-    refreshBalances,
-    smartWalletAddress,
-    walletReady,
-    checkAllowance,
-    ensureAllowance,
-    signTypedData,
-  ]);
-
-  const handleDeclinePayment = useCallback(async () => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    await NfcReader.stopReader();
-    await NfcReader.clearScanSession();
-    setErrorType(undefined);
-    setMerchantRequest(null);
-    setSignature(null);
-    setScreenState("idle");
-    setReaderCycle((current) => current + 1);
-  }, []);
+  }, [canScan, handleMerchantRequest, readerCycle, walletStatus]);
 
   const handleCancel = useCallback(async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
@@ -353,7 +370,7 @@ export default function PayMerchantScreen() {
     setScreenState("idle");
     setErrorType(undefined);
     setMerchantRequest(null);
-    setSignature(null);
+    setResolvedMerchantEnsName(null);
     setReaderCycle((current) => current + 1);
   }, []);
 
@@ -370,10 +387,10 @@ export default function PayMerchantScreen() {
 
   const merchantDisplay = useMemo(() => {
     if (!merchantRequest) return null;
-    const name = merchantRequest.merchantName;
+    const name = resolvedMerchantEnsName ?? merchantRequest.merchantName;
     const address = merchantRequest.merchantAddress;
     return name || `${address.slice(0, 6)}...${address.slice(-4)}`;
-  }, [merchantRequest]);
+  }, [merchantRequest, resolvedMerchantEnsName]);
 
   const backgroundColor = COLORS.primaryBlue;
 
@@ -413,7 +430,7 @@ export default function PayMerchantScreen() {
                 <Text style={styles.largeAmount}>
                   {formatUnits(merchantRequest.amount, TOKEN_DECIMALS)} {tokenSymbol}
                 </Text>
-                <Text style={styles.hintText}>Review and confirm payment</Text>
+                <Text style={styles.hintText}>Authorizing payment automatically...</Text>
               </View>
             )}
 
@@ -445,13 +462,8 @@ export default function PayMerchantScreen() {
                 <Text style={styles.successIcon}>✓</Text>
                 <Text style={styles.statusText}>PAYMENT AUTHORIZED</Text>
                 <Text style={styles.hintText}>
-                  The merchant will claim your payment
+                  Authorization sent to {merchantDisplay ?? "merchant"}
                 </Text>
-                {signature && (
-                  <Text style={styles.hintText}>
-                    Sig: {signature.slice(0, 10)}...{signature.slice(-8)}
-                  </Text>
-                )}
               </View>
             )}
 
@@ -481,10 +493,9 @@ export default function PayMerchantScreen() {
         {smartWalletAddress && (
           <View style={styles.infoBoxShadow}>
             <View style={styles.infoBox}>
-              <Text style={styles.infoLabel}>YOUR WALLET</Text>
-              <Text style={styles.infoText}>
-                {smartWalletAddress.slice(0, 6)}...{smartWalletAddress.slice(-4)}
-              </Text>
+              <Text style={styles.infoLabel}>PAYING USER</Text>
+              <Text style={styles.infoText}>{payerEnsName ?? shortAddress(smartWalletAddress)}</Text>
+              <Text style={styles.infoSubtext}>{shortAddress(smartWalletAddress)}</Text>
             </View>
           </View>
         )}
@@ -502,21 +513,6 @@ export default function PayMerchantScreen() {
         </View>
 
         {/* Action Buttons based on state */}
-        {screenState === "request_received" && (
-          <>
-            <View style={styles.footerButtonShadow}>
-              <Pressable onPress={handleConfirmPayment} style={styles.confirmButton}>
-                <Text style={styles.confirmButtonText}>CONFIRM PAYMENT</Text>
-              </Pressable>
-            </View>
-            <View style={styles.footerButtonShadow}>
-              <Pressable onPress={handleDeclinePayment} style={styles.declineButton}>
-                <Text style={styles.footerButtonText}>DECLINE</Text>
-              </Pressable>
-            </View>
-          </>
-        )}
-
         {(screenState === "scanning" || screenState === "idle") && (
           <View style={styles.footerButtonShadow}>
             <Pressable onPress={handleCancel} style={styles.footerButton}>
@@ -702,6 +698,12 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: COLORS.textPrimary,
   },
+  infoSubtext: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: COLORS.textMuted,
+    marginTop: 4,
+  },
   footerStack: {
     width: "100%",
     gap: 12,
@@ -739,27 +741,5 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     color: COLORS.textPrimary,
     letterSpacing: 1,
-  },
-  confirmButton: {
-    backgroundColor: COLORS.green400,
-    borderWidth: BORDER_THICK.width,
-    borderColor: COLORS.border,
-    paddingVertical: 14,
-    alignItems: "center",
-    transform: [{ translateX: -SHADOW_OFFSET.width }, { translateY: -SHADOW_OFFSET.height }],
-  },
-  confirmButtonText: {
-    fontSize: 16,
-    fontWeight: "900",
-    color: COLORS.textPrimary,
-    letterSpacing: 1,
-  },
-  declineButton: {
-    backgroundColor: COLORS.pink400,
-    borderWidth: BORDER_THICK.width,
-    borderColor: COLORS.border,
-    paddingVertical: 14,
-    alignItems: "center",
-    transform: [{ translateX: -SHADOW_OFFSET.width }, { translateY: -SHADOW_OFFSET.height }],
   },
 });
