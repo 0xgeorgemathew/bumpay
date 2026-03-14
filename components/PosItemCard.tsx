@@ -13,6 +13,15 @@ interface PosItemCardProps {
   onDecrement: () => void;
 }
 
+function QuantityButtonIcon({ type }: { type: "increment" | "decrement" }) {
+  return (
+    <View style={styles.quantityIcon}>
+      <View style={styles.quantityIconHorizontal} />
+      {type === "increment" ? <View style={styles.quantityIconVertical} /> : null}
+    </View>
+  );
+}
+
 /**
  * POS Item Card with neobrutalism styling
  * Displays item details with quantity controls
@@ -62,7 +71,7 @@ export function PosItemCard({
                 pressed && styles.buttonPressed,
               ]}
             >
-              <Text style={styles.quantityButtonText}>−</Text>
+              <QuantityButtonIcon type="decrement" />
             </Pressable>
           </View>
           <View style={styles.quantityDisplay}>
@@ -77,7 +86,7 @@ export function PosItemCard({
                 pressed && styles.buttonPressed,
               ]}
             >
-              <Text style={styles.quantityButtonText}>+</Text>
+              <QuantityButtonIcon type="increment" />
             </Pressable>
           </View>
         </View>
@@ -156,11 +165,23 @@ const styles = StyleSheet.create({
   buttonPressed: {
     transform: [{ translateX: 0 }, { translateY: 0 }],
   },
-  quantityButtonText: {
-    fontSize: 20,
-    fontWeight: "900",
-    color: COLORS.textPrimary,
-    lineHeight: 24,
+  quantityIcon: {
+    width: 14,
+    height: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  quantityIconHorizontal: {
+    position: "absolute",
+    width: 14,
+    height: 3,
+    backgroundColor: COLORS.textPrimary,
+  },
+  quantityIconVertical: {
+    position: "absolute",
+    width: 3,
+    height: 14,
+    backgroundColor: COLORS.textPrimary,
   },
   quantityDisplay: {
     minWidth: 24,
