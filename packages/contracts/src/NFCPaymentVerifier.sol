@@ -2,18 +2,18 @@
 pragma solidity ^0.8.28;
 
 import {EIP712} from "openzeppelin-contracts/utils/cryptography/EIP712.sol";
-import {ECDSA} from "openzeppelin-contracts/utils/cryptography/ECDSA.sol";
+import {SignatureChecker} from "openzeppelin-contracts/utils/cryptography/SignatureChecker.sol";
 import {ReentrancyGuard} from "openzeppelin-contracts/utils/ReentrancyGuard.sol";
 import {Ownable} from "openzeppelin-contracts/access/Ownable.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
 
 /// @title NFC Payment Verifier
 /// @notice Verifies EIP-712 signed payment authorizations and transfers tokens
+/// @dev Supports both EOA signatures (ECDSA) and ERC-1271 smart wallet signatures
 contract NFCPaymentVerifier is EIP712, ReentrancyGuard, Ownable {
-    using ECDSA for bytes32;
 
-    /// @notice The ERC20 token used for payments
-    IERC20 public immutable token;
+    /// @notice Supported payment tokens (USDC, USDT)
+    mapping(address token => bool supported) public supportedTokens;
 
     /// @notice Tracks used nonces per customer to prevent replay attacks
     mapping(address customer => mapping(uint256 nonce => bool used)) public usedNonces;
@@ -22,9 +22,13 @@ contract NFCPaymentVerifier is EIP712, ReentrancyGuard, Ownable {
     event PaymentClaimed(
         address indexed customer,
         address indexed merchant,
+        address indexed token,
         uint256 amount,
         uint256 nonce
     );
+
+    /// @notice Emitted when a token is added or removed from support
+    event TokenSupportUpdated(address indexed token, bool supported);
 
     /// @notice Thrown when signature verification fails
     error InvalidSignature();
@@ -38,21 +42,35 @@ contract NFCPaymentVerifier is EIP712, ReentrancyGuard, Ownable {
     /// @notice Thrown when token transfer fails
     error TransferFailed();
 
-    /// @notice The typehash for PaymentAuthorization struct
+    /// @notice Thrown when token is not supported
+    error TokenNotSupported();
+
+    /// @notice The typehash for PaymentAuthorization struct (now includes token)
     bytes32 private constant PAYMENT_TYPEHASH = keccak256(
-        "PaymentAuthorization(address merchant,address customer,uint256 amount,uint256 nonce,uint256 deadline)"
+        "PaymentAuthorization(address token,address merchant,address customer,uint256 amount,uint256 nonce,uint256 deadline)"
     );
 
-    /// @param _token The ERC20 token address for payments
+    /// @param usdc USDC token address
+    /// @param usdt USDT token address
     /// @param initialOwner The initial contract owner
-    constructor(address _token, address initialOwner)
+    constructor(address usdc, address usdt, address initialOwner)
         EIP712("NFC Payment Verifier", "1")
         Ownable(initialOwner)
     {
-        token = IERC20(_token);
+        supportedTokens[usdc] = true;
+        supportedTokens[usdt] = true;
+        emit TokenSupportUpdated(usdc, true);
+        emit TokenSupportUpdated(usdt, true);
+    }
+
+    /// @notice Add or remove token support (owner only)
+    function setTokenSupport(address token, bool supported) external onlyOwner {
+        supportedTokens[token] = supported;
+        emit TokenSupportUpdated(token, supported);
     }
 
     /// @notice Claims a payment using an EIP-712 signed authorization
+    /// @param token The ERC20 token address for payment
     /// @param merchant The recipient address (POS wallet)
     /// @param customer The signer address (payment device wallet)
     /// @param amount The token amount to transfer
@@ -60,6 +78,7 @@ contract NFCPaymentVerifier is EIP712, ReentrancyGuard, Ownable {
     /// @param deadline Expiration timestamp
     /// @param signature EIP-712 signature from customer
     function claimPayment(
+        address token,
         address merchant,
         address customer,
         uint256 amount,
@@ -67,6 +86,10 @@ contract NFCPaymentVerifier is EIP712, ReentrancyGuard, Ownable {
         uint256 deadline,
         bytes calldata signature
     ) external nonReentrant {
+        if (!supportedTokens[token]) {
+            revert TokenNotSupported();
+        }
+
         if (block.timestamp > deadline) {
             revert SignatureExpired();
         }
@@ -76,43 +99,38 @@ contract NFCPaymentVerifier is EIP712, ReentrancyGuard, Ownable {
         }
 
         bytes32 digest = _hashPaymentAuthorization(
-            merchant, customer, amount, nonce, deadline
+            token, merchant, customer, amount, nonce, deadline
         );
 
-        address signer = digest.recover(signature);
-        if (signer != customer) {
+        if (!SignatureChecker.isValidSignatureNowCalldata(customer, digest, signature)) {
             revert InvalidSignature();
         }
 
         usedNonces[customer][nonce] = true;
 
-        bool success = token.transferFrom(customer, merchant, amount);
+        bool success = IERC20(token).transferFrom(customer, merchant, amount);
         if (!success) {
             revert TransferFailed();
         }
 
-        emit PaymentClaimed(customer, merchant, amount, nonce);
+        emit PaymentClaimed(customer, merchant, token, amount, nonce);
     }
 
     /// @notice Computes the EIP-712 typed data hash for a payment authorization
-    /// @param merchant The recipient address
-    /// @param customer The signer address
-    /// @param amount The token amount
-    /// @param nonce Unique identifier
-    /// @param deadline Expiration timestamp
-    /// @return The EIP-712 typed data hash
     function hashPaymentAuthorization(
+        address token,
         address merchant,
         address customer,
         uint256 amount,
         uint256 nonce,
         uint256 deadline
     ) external view returns (bytes32) {
-        return _hashPaymentAuthorization(merchant, customer, amount, nonce, deadline);
+        return _hashPaymentAuthorization(token, merchant, customer, amount, nonce, deadline);
     }
 
     /// @dev Internal function to compute the typed data hash
     function _hashPaymentAuthorization(
+        address token,
         address merchant,
         address customer,
         uint256 amount,
@@ -121,6 +139,7 @@ contract NFCPaymentVerifier is EIP712, ReentrancyGuard, Ownable {
     ) internal view returns (bytes32) {
         return _hashTypedDataV4(keccak256(abi.encode(
             PAYMENT_TYPEHASH,
+            token,
             merchant,
             customer,
             amount,

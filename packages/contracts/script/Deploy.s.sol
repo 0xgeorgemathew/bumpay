@@ -2,32 +2,32 @@
 pragma solidity ^0.8.28;
 
 import {console} from "forge-std/Script.sol";
-import {USDC} from "../src/USDC.sol";
 import {NFCPaymentVerifier} from "../src/NFCPaymentVerifier.sol";
 import {DeployHelpers} from "./DeployHelpers.s.sol";
 
 /// @title Main Deployment Script
-/// @notice Deploys USDC mock token and NFCPaymentVerifier
+/// @notice Deploys NFCPaymentVerifier with support for Aave faucet tokens
 contract DeployScript is DeployHelpers {
+    // Real Aave faucet tokens on Base Sepolia
+    address internal constant USDC = 0xba50Cd2A20f6DA35D788639E581bca8d0B5d4D5f;
+    address internal constant USDT = 0x0a215D8ba66387DCA84B284D18c3B4ec3de6E54a;
+
     /// @notice Deployer address (set via PRIVATE_KEY or keystore)
     address internal deployer;
 
-    /// @notice Deploys all contracts in order
+    /// @notice Deploys all contracts
     function run() external ScaffoldEthDeployerRunner {
         deployer = msg.sender;
         console.log("Deploying from: %s", deployer);
 
-        // 1. Deploy USDC mock token
-        USDC usdc = new USDC();
-        _addDeployment("USDC", address(usdc));
-
-        // 2. Deploy NFCPaymentVerifier with USDC address
         NFCPaymentVerifier verifier = new NFCPaymentVerifier(
-            address(usdc),
-            deployer // initial owner
+            USDC,
+            USDT,
+            deployer
         );
         _addDeployment("NFCPaymentVerifier", address(verifier));
 
         console.log("Deployment complete!");
+        console.log("Supported tokens: USDC=%s, USDT=%s", USDC, USDT);
     }
 }
