@@ -1,4 +1,4 @@
-import type { Address, Hex } from "viem";
+import type { Address } from "viem";
 import { CHAIN_ID, TOKEN_ADDRESS, isSupportedPaymentToken } from "../blockchain/contracts";
 import type { PaymentPolicy } from "./policy";
 import type { RecipientProfile, SupportedToken } from "../recipient-profile";
@@ -11,16 +11,15 @@ export interface PaymentIntent {
 }
 
 export interface ExecutionStep {
-  kind: "transfer" | "swap" | "bridge" | "borrow" | "composite";
+  kind: "transfer";
   chainId: number;
   token: SupportedToken;
   to: Address;
   amount: bigint;
-  data?: Hex;
 }
 
 export interface PaymentPlan {
-  kind: "direct" | "swap" | "bridge" | "borrow" | "composite";
+  kind: "direct";
   targetChainId: number;
   targetToken: SupportedToken;
   targetAmount: bigint;
@@ -37,7 +36,6 @@ export interface DirectFundingState {
 export interface PaymentPlanResult {
   intent: PaymentIntent;
   directPlan: PaymentPlan | null;
-  requiresAgent: boolean;
   reason?: string;
 }
 
@@ -99,7 +97,6 @@ export function planPayment({
     return {
       intent,
       directPlan: null,
-      requiresAgent: true,
       reason: "Current chain is not allowed by the payment policy.",
     };
   }
@@ -108,7 +105,6 @@ export function planPayment({
     return {
       intent,
       directPlan: null,
-      requiresAgent: true,
       reason: "Recipient does not have a supported receiving token configured.",
     };
   }
@@ -117,7 +113,6 @@ export function planPayment({
     return {
       intent,
       directPlan: null,
-      requiresAgent: true,
       reason: "Recipient does not accept the configured token on the current chain.",
     };
   }
@@ -126,14 +121,12 @@ export function planPayment({
     return {
       intent,
       directPlan: null,
-      requiresAgent: true,
       reason: "Smart wallet does not hold enough of the receiver's preferred token.",
     };
   }
 
   return {
     intent,
-    requiresAgent: false,
     directPlan: {
       kind: "direct",
       targetChainId: funding.chainId,

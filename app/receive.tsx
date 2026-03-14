@@ -252,6 +252,7 @@ export default function ReceiveScreen() {
   const sessionIdRef = useRef(requestIdRef.current);
   const handlingIntentRef = useRef(false);
   const stopWatcherRef = useRef<(() => void) | null>(null);
+  const payerEnsNameRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -363,12 +364,12 @@ export default function ReceiveScreen() {
       router.replace({
         pathname: "/payment-success",
         params: buildSuccessRouteParams(details, "receiver", {
-          fromLabel: payerEnsName,
+          fromLabel: payerEnsNameRef.current,
           toLabel: verifiedEnsName,
         }),
       });
     },
-    [payerEnsName, router, verifiedEnsName],
+    [router, verifiedEnsName],
   );
 
   const handleWatchFailure = useCallback(
@@ -408,6 +409,7 @@ export default function ReceiveScreen() {
 
       const payerStatus = await getEnsClaimStatus(trackedIntent.from);
       setPayerEnsName(payerStatus.fullName);
+      payerEnsNameRef.current = payerStatus.fullName;
       setReceivingTokenAddress(trackedIntent.tokenAddress);
       playNfcCompleteSound().catch(console.error);
 

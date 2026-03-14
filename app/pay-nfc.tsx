@@ -48,7 +48,6 @@ type PayState =
   | "scanning"
   | "broadcasting"
   | "watching_chain"
-  | "agent"
   | "error"
   | "connection_lost";
 
@@ -58,7 +57,6 @@ type PayerStatus =
   | "wallet_setup_failed"
   | "ready_to_tap"
   | "pairing"
-  | "agent_required"
   | "sending"
   | "watching_chain"
   | "payment_failed"
@@ -92,8 +90,6 @@ function getPayerStatusLabel(status: PayerStatus, recipientEnsName?: string) {
       return "READY TO TAP";
     case "pairing":
       return `PAIRING ${recipientLabel}`.toUpperCase();
-    case "agent_required":
-      return "AGENT REQUIRED";
     case "sending":
       return `SENDING TO ${recipientLabel}`.toUpperCase();
     case "watching_chain":
@@ -363,11 +359,7 @@ export default function PayNfcScreen() {
         });
 
         if (!result.directPlan) {
-          await stopReader();
-          setPayState("agent");
-          setStatusLabel(getPayerStatusLabel("agent_required"));
-          await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-          return;
+          throw new Error(result.reason ?? "Payment cannot be executed with the current wallet state.");
         }
 
         if (result.directPlan.targetToken === "NATIVE") {
