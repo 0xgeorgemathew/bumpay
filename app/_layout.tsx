@@ -5,6 +5,7 @@ import { SmartWalletsProvider } from "@privy-io/expo/smart-wallets";
 import { baseSepolia } from "viem/chains";
 import { COLORS } from "../constants/theme";
 import { BalanceProvider } from "../lib/balance-context";
+import { TransactionProvider } from "../lib/transaction-context";
 import { BumpEnsDraftProvider } from "../lib/ens/bump-ens-context";
 import { OperationalWalletProvider } from "../lib/wallet";
 
@@ -26,7 +27,8 @@ export default function RootLayout() {
         <OperationalWalletProvider>
           <BumpEnsDraftProvider>
             <BalanceProvider>
-              <Stack
+              <TransactionProvider>
+                <Stack
                 screenOptions={{
                   headerShown: false,
                   contentStyle: { backgroundColor: COLORS.background },
@@ -44,7 +46,8 @@ export default function RootLayout() {
                 <Stack.Screen name="payment-success" />
                 <Stack.Screen name="ens-onboarding" />
                 <Stack.Screen name="ens-profile" />
-              </Stack>
+                </Stack>
+              </TransactionProvider>
             </BalanceProvider>
           </BumpEnsDraftProvider>
         </OperationalWalletProvider>

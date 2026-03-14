@@ -3,75 +3,16 @@ import { View, Text, StyleSheet, Pressable, ScrollView } from "react-native";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS, BORDER_THICK } from "../constants/theme";
+import { useTransactions } from "../lib/transaction-context";
 
-interface Transaction {
-  id: string;
-  name: string;
-  date: string;
-  amount: number;
-  isPositive: boolean;
-  iconName: keyof typeof Ionicons.glyphMap;
-  iconBgColor: string;
-}
-
-const MOCK_TRANSACTIONS: Transaction[] = [
-  {
-    id: "1",
-    name: "Coffee Shop",
-    date: "Today, 09:41 AM",
-    amount: -4.5,
-    isPositive: false,
-    iconName: "cafe",
-    iconBgColor: COLORS.pink400,
-  },
-  {
-    id: "2",
-    name: "Alex Rivera",
-    date: "Yesterday",
-    amount: 120.0,
-    isPositive: true,
-    iconName: "person",
-    iconBgColor: COLORS.cyan400,
-  },
-  {
-    id: "3",
-    name: "Uber Ride",
-    date: "Mar 5, 2024",
-    amount: -15.75,
-    isPositive: false,
-    iconName: "car",
-    iconBgColor: COLORS.decorativeOrange,
-  },
-  {
-    id: "4",
-    name: "Salary Deposit",
-    date: "Mar 1, 2024",
-    amount: 2500.0,
-    isPositive: true,
-    iconName: "wallet",
-    iconBgColor: COLORS.green400,
-  },
-  {
-    id: "5",
-    name: "Netflix",
-    date: "Feb 28, 2024",
-    amount: -15.99,
-    isPositive: false,
-    iconName: "film",
-    iconBgColor: COLORS.red500,
-  },
-];
-
-interface TransactionListProps {
-  onViewAll?: () => void;
-}
-
-export function TransactionList({ onViewAll }: TransactionListProps) {
+export function TransactionList() {
+  const [isExpanded, setIsExpanded] = useState(false);
   const [viewAllPressed, setViewAllPressed] = useState(false);
+  const { state } = useTransactions();
 
   const handleViewAll = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    onViewAll?.();
+    setIsExpanded(!isExpanded);
   };
 
   const formatAmount = (amount: number, isPositive: boolean) => {
@@ -80,42 +21,64 @@ export function TransactionList({ onViewAll }: TransactionListProps) {
     return `${prefix}$${absAmount.toFixed(2)}`;
   };
 
+  const displayCount = isExpanded ? state.transactions.length : 5;
+  const transactions = state.transactions.slice(0, displayCount);
+  const hasMore = state.transactions.length > 5;
+  const buttonText = isExpanded ? "Show Less" : "View All";
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Recent Activity</Text>
-        <Pressable
-          onPress={handleViewAll}
-          onPressIn={() => setViewAllPressed(true)}
-          onPressOut={() => setViewAllPressed(false)}
-          style={viewAllPressed && styles.viewAllPressed}
-        >
-          <Text style={styles.viewAll}>View All</Text>
-        </Pressable>
+        {hasMore && (
+          <Pressable
+            onPress={handleViewAll}
+            onPressIn={() => setViewAllPressed(true)}
+            onPressOut={() => setViewAllPressed(false)}
+            style={viewAllPressed && styles.viewAllPressed}
+          >
+            <Text style={styles.viewAll}>{buttonText}</Text>
+          </Pressable>
+        )}
       </View>
       <ScrollView
-        style={styles.listContainer}
+        style={[styles.listContainer, isExpanded && styles.listContainerExpanded]}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
       >
-        {MOCK_TRANSACTIONS.map((tx) => (
-          <View key={tx.id} style={styles.txCardShadow}>
-            <View style={styles.txCard}>
-              <View style={styles.txLeft}>
-                <View style={[styles.txIconContainer, { backgroundColor: tx.iconBgColor }]}>
-                  <Ionicons name={tx.iconName} size={20} color={COLORS.textPrimary} />
-                </View>
-                <View style={styles.txInfo}>
-                  <Text style={styles.txName}>{tx.name}</Text>
-                  <Text style={styles.txDate}>{tx.date}</Text>
-                </View>
-              </View>
-              <Text style={[styles.txAmount, tx.isPositive && styles.txAmountPositive]}>
-                {formatAmount(tx.amount, tx.isPositive)}
-              </Text>
-            </View>
+        {transactions.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyText}>No transactions yet</Text>
+            <Text style={styles.emptySubtext}>
+              Your payment history will appear here
+            </Text>
           </View>
-         ))}
+        ) : (
+          transactions.map((tx) => (
+            <View key={tx.id} style={styles.txCardShadow}>
+              <View style={styles.txCard}>
+                <View style={styles.txLeft}>
+                  <View
+                    style={[styles.txIconContainer, { backgroundColor: tx.iconBgColor }]}
+                  >
+                    <Ionicons
+                      name={tx.iconName}
+                      size={20}
+                      color={COLORS.textPrimary}
+                    />
+                  </View>
+                  <View style={styles.txInfo}>
+                    <Text style={styles.txName}>{tx.name}</Text>
+                    <Text style={styles.txDate}>{tx.date}</Text>
+                  </View>
+                </View>
+                <Text style={[styles.txAmount, tx.isPositive && styles.txAmountPositive]}>
+                  {formatAmount(tx.amount, tx.isPositive)}
+                </Text>
+              </View>
+            </View>
+          ))
+        )}
       </ScrollView>
     </View>
   );
@@ -150,10 +113,28 @@ const styles = StyleSheet.create({
   listContainer: {
     maxHeight: 200,
   },
+  listContainerExpanded: {
+    maxHeight: 400,
+  },
   listContent: {
     gap: 12,
     paddingTop: 4,
     paddingLeft: 4,
+  },
+  emptyState: {
+    paddingVertical: 24,
+    alignItems: "center",
+    gap: 4,
+  },
+  emptyText: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: COLORS.textMuted,
+  },
+  emptySubtext: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: COLORS.textMuted,
   },
   txCardShadow: {
     backgroundColor: COLORS.border,

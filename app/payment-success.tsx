@@ -7,6 +7,7 @@ import { formatPaymentAmount } from "../lib/payments/tracking";
 import { playPaymentSuccessSound } from "../lib/audio/feedback";
 import { useOperationalWallet } from "../lib/wallet";
 import { syncLedgerEntry } from "../lib/fileverse";
+import { useTransactions } from "../lib/transaction-context";
 
 function shortAddress(address?: string) {
   if (!address) {
@@ -19,6 +20,7 @@ function shortAddress(address?: string) {
 export default function PaymentSuccessScreen() {
   const router = useRouter();
   const { smartWalletAddress } = useOperationalWallet();
+  const { addTransaction } = useTransactions();
   const syncedKeyRef = useRef<string | null>(null);
   const [ledgerState, setLedgerState] = useState<{
     status: "idle" | "syncing" | "synced" | "error";
@@ -76,22 +78,48 @@ export default function PaymentSuccessScreen() {
       message: "Saving this receipt to your private Fileverse ledger.",
     });
 
+    // Store params with definite values for use in callbacks
+    const txRole = params.role === "receiver" ? "receiver" : "payer";
+    const txFrom = params.from as `0x${string}`;
+    const txTo = params.to as `0x${string}`;
+    const txAmount = BigInt(params.amount);
+    const txTokenSymbol = params.tokenSymbol;
+    const txChainName = params.chainName;
+    const txTxHash = params.txHash as `0x${string}`;
+    const txFromLabel = params.fromLabel;
+    const txToLabel = params.toLabel;
+
     syncLedgerEntry({
       ownerAddress: smartWalletAddress,
-      role: params.role === "receiver" ? "receiver" : "payer",
-      amount: BigInt(params.amount),
-      tokenSymbol: params.tokenSymbol,
-      chainName: params.chainName,
-      txHash: params.txHash as `0x${string}`,
-      from: params.from as `0x${string}`,
-      to: params.to as `0x${string}`,
-      fromLabel: params.fromLabel ?? null,
-      toLabel: params.toLabel ?? null,
+      role: txRole,
+      amount: txAmount,
+      tokenSymbol: txTokenSymbol,
+      chainName: txChainName,
+      txHash: txTxHash,
+      from: txFrom,
+      to: txTo,
+      fromLabel: txFromLabel ?? null,
+      toLabel: txToLabel ?? null,
     })
       .then(() => {
         setLedgerState({
           status: "synced",
           message: "Saved to your private Fileverse ledger.",
+        });
+
+        // Also add to local transaction history
+        addTransaction({
+          role: txRole,
+          from: txFrom,
+          to: txTo,
+          amount: txAmount,
+          tokenSymbol: txTokenSymbol,
+          chainName: txChainName,
+          txHash: txTxHash,
+          fromLabel: txFromLabel,
+          toLabel: txToLabel,
+        }).catch((error) => {
+          console.warn("Failed to add transaction to local history:", error);
         });
       })
       .catch((error) => {
