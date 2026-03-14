@@ -15,7 +15,7 @@
       "package": "com.bump.wallet",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#1A1A2E"
+        "backgroundColor": "#2D6A6A"
       }
     },
     "plugins": [
