@@ -7,9 +7,11 @@ export type MessageKind =
   | "GET_PAYMENT_REQUEST"
   | "PAYMENT_REQUEST"
   | "PAYMENT_INTENT"
+  | "MERCHANT_PAYMENT_REQUEST"
+  | "MERCHANT_PAYMENT_AUTHORIZATION"
   | "ERROR";
 
-type ShortMessageKind = "Q" | "R" | "I" | "E";
+type ShortMessageKind = "Q" | "R" | "I" | "M" | "A" | "E";
 
 interface ProtocolEnvelope {
   version: number;
@@ -66,6 +68,44 @@ export type PaymentIntentMessage = ProtocolEnvelope & {
   kind: "PAYMENT_INTENT";
 } & Omit<PaymentIntent, "sessionId">;
 
+/**
+ * Merchant payment request message
+ * Sent from merchant (POS) to customer during NFC tap
+ */
+export type MerchantPaymentRequestMessage = ProtocolEnvelope & {
+  kind: "MERCHANT_PAYMENT_REQUEST";
+  requestId: string;
+  /** Merchant's wallet address (receives payment) */
+  merchantAddress: Address;
+  /** Payment amount in token smallest unit */
+  amount: string;
+  /** Token contract address */
+  tokenAddress: Address;
+  /** Chain ID for the payment */
+  chainId: number;
+  /** Verifier contract that will validate and claim the payment */
+  verifyingContract: Address;
+  /** Unix timestamp when authorization expires */
+  deadline: number;
+  /** Unique nonce for this authorization */
+  nonce: string;
+  /** Optional merchant display name */
+  merchantName?: string;
+};
+
+/**
+ * Merchant payment authorization message
+ * Sent from customer to merchant (POS) after signing
+ */
+export type MerchantPaymentAuthorizationMessage = ProtocolEnvelope & {
+  kind: "MERCHANT_PAYMENT_AUTHORIZATION";
+  requestId: string;
+  /** Customer's wallet address (smart wallet) */
+  customerAddress: Address;
+  /** EIP-712 signature for claimPayment() */
+  signature: Hex;
+};
+
 export type ErrorMessage = ProtocolEnvelope & {
   kind: "ERROR";
   message: string;
@@ -76,12 +116,16 @@ export type ProtocolMessage =
   | GetPaymentRequestMessage
   | PaymentRequestMessage
   | PaymentIntentMessage
+  | MerchantPaymentRequestMessage
+  | MerchantPaymentAuthorizationMessage
   | ErrorMessage;
 
 const SHORT_KIND_BY_KIND: Record<MessageKind, ShortMessageKind> = {
   GET_PAYMENT_REQUEST: "Q",
   PAYMENT_REQUEST: "R",
   PAYMENT_INTENT: "I",
+  MERCHANT_PAYMENT_REQUEST: "M",
+  MERCHANT_PAYMENT_AUTHORIZATION: "A",
   ERROR: "E",
 };
 
@@ -96,6 +140,12 @@ function decodeMessageKind(value: unknown): MessageKind | null {
     case "I":
     case "PAYMENT_INTENT":
       return "PAYMENT_INTENT";
+    case "M":
+    case "MERCHANT_PAYMENT_REQUEST":
+      return "MERCHANT_PAYMENT_REQUEST";
+    case "A":
+    case "MERCHANT_PAYMENT_AUTHORIZATION":
+      return "MERCHANT_PAYMENT_AUTHORIZATION";
     case "E":
     case "ERROR":
       return "ERROR";
@@ -256,6 +306,64 @@ export function parseProtocolMessage(data: string): ProtocolMessage | null {
         chainId,
         createdAt,
         txHash: readOptionalString(parsed, "txHash") as Hex | undefined,
+      };
+    }
+
+    if (kind === "MERCHANT_PAYMENT_REQUEST") {
+      const requestId = readString(parsed, "requestId");
+      const merchantAddress = readString(parsed, "merchantAddress");
+      const amount = readString(parsed, "amount");
+      const tokenAddress = readString(parsed, "tokenAddress");
+      const chainId = readNumber(parsed, "chainId");
+      const verifyingContract = readString(parsed, "verifyingContract");
+      const deadline = readNumber(parsed, "deadline");
+      const nonce = readString(parsed, "nonce");
+
+      if (
+        !requestId ||
+        !merchantAddress ||
+        !amount ||
+        !tokenAddress ||
+        chainId === null ||
+        !verifyingContract ||
+        deadline === null ||
+        !nonce
+      ) {
+        return null;
+      }
+
+      return {
+        version,
+        sessionId,
+        kind,
+        requestId,
+        merchantAddress: merchantAddress as Address,
+        amount,
+        tokenAddress: tokenAddress as Address,
+        chainId,
+        verifyingContract: verifyingContract as Address,
+        deadline,
+        nonce,
+        merchantName: readOptionalString(parsed, "merchantName"),
+      };
+    }
+
+    if (kind === "MERCHANT_PAYMENT_AUTHORIZATION") {
+      const requestId = readString(parsed, "requestId");
+      const customerAddress = readString(parsed, "customerAddress");
+      const signature = readString(parsed, "signature");
+
+      if (!requestId || !customerAddress || !signature) {
+        return null;
+      }
+
+      return {
+        version,
+        sessionId,
+        kind,
+        requestId,
+        customerAddress: customerAddress as Address,
+        signature: signature as Hex,
       };
     }
 

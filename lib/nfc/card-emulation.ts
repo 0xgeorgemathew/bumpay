@@ -21,6 +21,8 @@ export interface CardState {
   hasPaymentIntent: boolean;
   errorMessage: string;
   lastCommand: string;
+  isMerchantMode: boolean;
+  hasPaymentAuthorization: boolean;
 }
 
 const CARD_EMULATION_EVENTS = {
@@ -51,6 +53,23 @@ export const CardEmulation = {
   clearPaymentIntent: async (): Promise<string> => {
     assertCardEmulationMethod("clearPaymentIntent");
     return CardEmulationModule.clearPaymentIntent();
+  },
+
+  // ============ Merchant Mode Methods ============
+
+  setMerchantMode: async (enabled: boolean): Promise<string> => {
+    assertCardEmulationMethod("setMerchantMode");
+    return CardEmulationModule.setMerchantMode(enabled);
+  },
+
+  getPaymentAuthorization: async (): Promise<string | null> => {
+    assertCardEmulationMethod("getPaymentAuthorization");
+    return CardEmulationModule.getPaymentAuthorization();
+  },
+
+  clearPaymentAuthorization: async (): Promise<string> => {
+    assertCardEmulationMethod("clearPaymentAuthorization");
+    return CardEmulationModule.clearPaymentAuthorization();
   },
 
   startListening: async (): Promise<string> => {
