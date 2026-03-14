@@ -29,6 +29,7 @@ function CustomTabBar({ state, descriptors, navigation }: TabBarProps) {
       {state.routes.map((route: any, index: number) => {
         const { options } = descriptors[route.key];
         const label = options.title || route.name;
+        const subLabel = route.name === "history" ? "privacy · bitgo" : null;
         const isFocused = state.index === index;
 
         const onPress = () => {
@@ -56,14 +57,26 @@ function CustomTabBar({ state, descriptors, navigation }: TabBarProps) {
               accessibilityState={isFocused ? { selected: true } : {}}
             >
               {icon}
-              <Text
-                style={[
-                  styles.tabLabel,
-                  { color: isFocused ? COLORS.primaryBlue : COLORS.textMuted },
-                ]}
-              >
-                {label}
-              </Text>
+              <View style={styles.labelStack}>
+                <Text
+                  style={[
+                    styles.tabLabel,
+                    { color: isFocused ? COLORS.primaryBlue : COLORS.textMuted },
+                  ]}
+                >
+                  {label}
+                </Text>
+                {subLabel ? (
+                  <Text
+                    style={[
+                      styles.tabSubLabel,
+                      { color: isFocused ? COLORS.primaryBlue : COLORS.textMuted },
+                    ]}
+                  >
+                    {subLabel}
+                  </Text>
+                ) : null}
+              </View>
             </Pressable>
           </Fragment>
         );
@@ -100,7 +113,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="history"
         options={{
-          title: "History",
+          title: "Merchant",
           tabBarIcon: ({ focused }) => (
             <View style={focused ? styles.iconShadow : null}>
               <View style={[styles.iconContainer, focused && styles.iconContainerActive]}>
@@ -170,12 +183,23 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 4,
   },
+  labelStack: {
+    alignItems: "center",
+    minHeight: 28,
+  },
   tabLabel: {
     fontWeight: "900",
     fontSize: 10,
     letterSpacing: 1,
     textTransform: "uppercase",
     marginTop: 8,
+  },
+  tabSubLabel: {
+    fontWeight: "800",
+    fontSize: 8,
+    letterSpacing: 0.5,
+    textTransform: "none",
+    marginTop: 2,
   },
   iconShadow: {
     backgroundColor: COLORS.border,

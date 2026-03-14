@@ -44,8 +44,6 @@ export default function MerchantTabScreen() {
               </View>
             </Pressable>
           </View>
-
-          {/* Pay Merchant Button */}
           <View style={styles.buttonShadow}>
             <Pressable
               onPress={handlePayMerchant}
@@ -65,6 +63,17 @@ export default function MerchantTabScreen() {
                 </Text>
               </View>
             </Pressable>
+          </View>
+        </View>
+
+        <View style={styles.infoBoxShadow}>
+          <View style={styles.infoBox}>
+            <Text style={styles.infoLabel}>HOW IT WORKS</Text>
+            <Text style={styles.infoText}>
+              Use NFC to process tap-to-pay transactions between the merchant and customer devices.
+              The merchant publishes a payment request and the customer completes the payment flow by
+              tap.
+            </Text>
           </View>
         </View>
       </View>
@@ -137,5 +146,29 @@ const styles = StyleSheet.create({
   payButtonSubtitle: {
     color: COLORS.textInverted,
     opacity: 0.8,
+  },
+  infoBoxShadow: {
+    backgroundColor: COLORS.border,
+    marginTop: 24,
+  },
+  infoBox: {
+    backgroundColor: COLORS.surface,
+    borderWidth: BORDER_THICK.width,
+    borderColor: COLORS.border,
+    padding: 20,
+    transform: [{ translateX: -SHADOW_OFFSET.width }, { translateY: -SHADOW_OFFSET.height }],
+  },
+  infoLabel: {
+    fontSize: 12,
+    fontWeight: "900",
+    color: COLORS.textPrimary,
+    letterSpacing: 2,
+    marginBottom: 10,
+  },
+  infoText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: COLORS.textPrimary,
+    lineHeight: 22,
   },
 });

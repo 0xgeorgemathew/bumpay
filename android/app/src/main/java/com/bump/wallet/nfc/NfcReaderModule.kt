@@ -120,7 +120,11 @@ class NfcReaderModule(reactContext: ReactApplicationContext) :
         }
 
         val kind = decodeResponseKind(responseJson)
-        if (kind != "PAYMENT_REQUEST" && kind != "MERCHANT_PAYMENT_REQUEST") {
+        if (
+            kind != "PAYMENT_REQUEST" &&
+            kind != "MERCHANT_PAYMENT_REQUEST" &&
+            kind != "MERCHANT_BITGO_PAYMENT_REQUEST"
+        ) {
             emitReaderError("Unexpected response: $kind")
             return null
         }
@@ -268,6 +272,7 @@ class NfcReaderModule(reactContext: ReactApplicationContext) :
         return when (json.optString("kind", json.optString("k", ""))) {
             "R", "PAYMENT_REQUEST" -> "PAYMENT_REQUEST"
             "M", "MERCHANT_PAYMENT_REQUEST" -> "MERCHANT_PAYMENT_REQUEST"
+            "B", "MERCHANT_BITGO_PAYMENT_REQUEST" -> "MERCHANT_BITGO_PAYMENT_REQUEST"
             "E", "ERROR" -> "ERROR"
             else -> ""
         }

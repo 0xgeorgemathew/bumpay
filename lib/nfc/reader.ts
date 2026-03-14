@@ -8,6 +8,7 @@ import {
   parseProtocolMessage,
   type PublishedPaymentRequest,
   type MerchantPaymentRequestMessage,
+  type MerchantBitGoPaymentRequestMessage,
 } from "./protocol";
 import {
   assertNativeModuleMethod,
@@ -35,6 +36,20 @@ export interface MerchantPaymentRequest {
   deadline: number;
   nonce: bigint;
   merchantName?: string;
+}
+
+export interface MerchantBitGoPaymentRequest {
+  sessionId: string;
+  checkoutId: string;
+  requestId: string;
+  receiveAddress: Address;
+  amount: bigint;
+  tokenSymbol: string;
+  tokenAddress: Address;
+  chainId: number;
+  expiresAt: number;
+  merchantName?: string;
+  rail: "bitgo";
 }
 
 function parsePublishedPaymentRequest(payload: string): PublishedPaymentRequest | null {
@@ -93,6 +108,27 @@ function parseMerchantPaymentRequest(payload: string): MerchantPaymentRequest | 
     deadline: message.deadline,
     nonce: BigInt(message.nonce),
     merchantName: message.merchantName,
+  };
+}
+
+function parseMerchantBitGoPaymentRequest(payload: string): MerchantBitGoPaymentRequest | null {
+  const message = parseProtocolMessage(payload);
+  if (!message || message.kind !== "MERCHANT_BITGO_PAYMENT_REQUEST") {
+    return null;
+  }
+
+  return {
+    sessionId: message.sessionId,
+    checkoutId: message.checkoutId,
+    requestId: message.requestId,
+    receiveAddress: message.receiveAddress,
+    amount: BigInt(message.amount),
+    tokenSymbol: message.tokenSymbol,
+    tokenAddress: message.tokenAddress,
+    chainId: message.chainId,
+    expiresAt: message.expiresAt,
+    merchantName: message.merchantName,
+    rail: message.rail,
   };
 }
 
@@ -185,6 +221,24 @@ export const NfcReaderEvents = {
       const request = parseMerchantPaymentRequest(data);
       if (!request) {
         // Not a merchant request, ignore (might be P2P request)
+        return;
+      }
+
+      callback(request);
+    });
+  },
+
+  onMerchantBitGoPaymentRequest: (
+    callback: (payload: MerchantBitGoPaymentRequest) => void,
+  ): EmitterSubscription | null => {
+    if (!nfcReaderEmitter) {
+      console.error(getNativeModuleError("NfcReaderModule"));
+      return null;
+    }
+
+    return nfcReaderEmitter.addListener(NFC_READER_EVENTS.PAYMENT_REQUEST, (data: string) => {
+      const request = parseMerchantBitGoPaymentRequest(data);
+      if (!request) {
         return;
       }
 
