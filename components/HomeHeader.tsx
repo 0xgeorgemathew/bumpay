@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { View, Text, StyleSheet, Pressable, Image } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
+import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
 import { usePrivy } from "@privy-io/expo";
@@ -22,6 +23,7 @@ export function HomeHeader() {
   const [hasEnsName, setHasEnsName] = useState(false);
   const [isEnsLoading, setIsEnsLoading] = useState(true);
   const [ensNameDisplay, setEnsNameDisplay] = useState<string | null>(null);
+  const [copiedEns, setCopiedEns] = useState(false);
 
   const getAvatarUrl = () => {
     const googleAccount = user?.linked_accounts?.find(
@@ -89,6 +91,14 @@ export function HomeHeader() {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
   };
 
+  const handleCopyEns = async () => {
+    if (!ensNameDisplay) return;
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    await Clipboard.setStringAsync(ensNameDisplay);
+    setCopiedEns(true);
+    setTimeout(() => setCopiedEns(false), 1500);
+  };
+
   const avatarUrl = getAvatarUrl();
 
   return (
@@ -131,9 +141,17 @@ export function HomeHeader() {
           <View style={styles.titleSection}>
             <Text style={styles.title}>Bump Wallet</Text>
             {!isEnsLoading && hasEnsName && ensNameDisplay && (
-              <Text style={styles.ensName} numberOfLines={1}>
-                {ensNameDisplay}
-              </Text>
+              <Pressable onPress={handleCopyEns} style={styles.ensNameRow}>
+                <Text style={styles.ensName} numberOfLines={1}>
+                  {ensNameDisplay}
+                </Text>
+                <Ionicons
+                  name={copiedEns ? "checkmark" : "copy-outline"}
+                  size={12}
+                  color={copiedEns ? COLORS.success : COLORS.primaryBlue}
+                  style={styles.copyIcon}
+                />
+              </Pressable>
             )}
           </View>
         </View>
@@ -241,11 +259,18 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
     color: COLORS.textPrimary,
   },
+  ensNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
   ensName: {
     fontSize: 11,
     fontWeight: "700",
     color: COLORS.primaryBlue,
     letterSpacing: 0.5,
+  },
+  copyIcon: {
+    marginLeft: 4,
   },
   notificationShadow: {
     backgroundColor: COLORS.border,
