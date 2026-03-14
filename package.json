@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "expo start --dev-client",
+    "start": "EXPO_UNSTABLE_BONJOUR=0 expo start --dev-client",
     "android": "sh ./scripts/android-install-all-debug.sh",
     "android:start": "sh ./scripts/android-start-all.sh",
     "android:start:tunnel": "EXPO_HOST=tunnel sh ./scripts/android-start-all.sh",

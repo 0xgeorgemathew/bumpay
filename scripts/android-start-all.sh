@@ -131,4 +131,4 @@ launch_apps_when_ready &
 echo ""
 echo "Starting Metro in the foreground. Use Expo's interactive controls for reloads."
 echo ""
-exec npx expo start --dev-client --host "$EXPO_HOST" --port "$EXPO_PORT" -c
+exec env EXPO_UNSTABLE_BONJOUR=0 npx expo start --dev-client --host "$EXPO_HOST" --port "$EXPO_PORT" -c

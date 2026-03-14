@@ -16,7 +16,7 @@ const PHONEPE_TTS_OPTIONS: Speech.SpeechOptions = {
  * Announce a received payment via text-to-speech (PhonePe style)
  */
 export function announcePaymentReceived(amount: string, token: string) {
-  const message = `${amount} ${token} Received on Bump Pay`;
+  const message = `${amount} ${token} Received on Bump Wallet`;
   Speech.speak(message, PHONEPE_TTS_OPTIONS);
 }
 
@@ -29,7 +29,7 @@ export async function announcePaymentReceivedAsync(
   token: string
 ): Promise<void> {
   return new Promise((resolve) => {
-    const message = `${amount} ${token} Received on Bump Pay`;
+    const message = `${amount} ${token} Received on Bump Wallet`;
     Speech.speak(message, {
       ...PHONEPE_TTS_OPTIONS,
       onDone: () => resolve(),
