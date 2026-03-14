@@ -13,17 +13,20 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { usePrivy } from "@privy-io/expo";
-import { parseUnits, formatUnits } from "viem";
+import { parseUnits, formatUnits, type Address } from "viem";
 import { COLORS, BORDER_THICK } from "../constants/theme";
 import { useOperationalWallet } from "../lib/wallet";
 import { playNfcDoneSound } from "../lib/audio/feedback";
 import { CardEmulation, CardEmulationEvents } from "../lib/nfc/card-emulation";
-import { getEnsClaimStatus } from "../lib/ens/service";
+import { getEnsClaimStatus, readEnsProfileByLabel } from "../lib/ens/service";
 import {
   CHAIN_NAME,
+  CHAIN_ID,
   TOKEN_DECIMALS,
+  TOKEN_ADDRESS,
   TOKEN_SYMBOL,
   getTokenSymbolByAddress,
+  isSupportedPaymentToken,
 } from "../lib/blockchain/contracts";
 import {
   buildClaimPaymentTransaction,
@@ -209,6 +212,8 @@ export default function MerchantScreen() {
   const [errorType, setErrorType] = useState<MerchantError | undefined>();
   const [session, setSession] = useState<MerchantSession | null>(null);
   const [merchantEnsName, setMerchantEnsName] = useState<string | null>(null);
+  const [merchantSettlementToken, setMerchantSettlementToken] =
+    useState<Address>(TOKEN_ADDRESS);
   const [customerEnsName, setCustomerEnsName] = useState<string | null>(null);
   const [customerAddress, setCustomerAddress] = useState<string | null>(null);
   const isStartingSessionRef = useRef(false);
@@ -235,6 +240,7 @@ export default function MerchantScreen() {
   useEffect(() => {
     if (!smartWalletAddress) {
       setMerchantEnsName(null);
+      setMerchantSettlementToken(TOKEN_ADDRESS);
       return;
     }
 
@@ -247,6 +253,50 @@ export default function MerchantScreen() {
         setMerchantEnsName(null);
       });
   }, [smartWalletAddress]);
+
+  const resolveMerchantSettlementToken = useCallback(async (): Promise<Address> => {
+    if (!smartWalletAddress) {
+      return TOKEN_ADDRESS;
+    }
+
+    try {
+      const status = await getEnsClaimStatus(smartWalletAddress);
+      if (!status.label) {
+        return TOKEN_ADDRESS;
+      }
+
+      const profile = await readEnsProfileByLabel(status.label);
+      const preferredAsset = profile?.defaultAsset;
+
+      if (
+        preferredAsset &&
+        preferredAsset.chainId === CHAIN_ID &&
+        preferredAsset.token !== "NATIVE" &&
+        isSupportedPaymentToken(preferredAsset.token)
+      ) {
+        return preferredAsset.token;
+      }
+    } catch (error) {
+      console.warn("Failed to resolve merchant settlement token:", error);
+    }
+
+    return TOKEN_ADDRESS;
+  }, [smartWalletAddress]);
+
+  useEffect(() => {
+    if (!smartWalletAddress) {
+      return;
+    }
+
+    resolveMerchantSettlementToken()
+      .then((tokenAddress) => {
+        setMerchantSettlementToken(tokenAddress);
+      })
+      .catch((error) => {
+        console.warn("Failed to preload merchant settlement token:", error);
+        setMerchantSettlementToken(TOKEN_ADDRESS);
+      });
+  }, [resolveMerchantSettlementToken, smartWalletAddress]);
 
   const handleKeyPress = async (key: string) => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
@@ -452,10 +502,13 @@ export default function MerchantScreen() {
     isStartingSessionRef.current = true;
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
 
+    const settlementToken = await resolveMerchantSettlementToken();
+    setMerchantSettlementToken(settlementToken);
+
     const newSession = createMerchantSession(
       smartWalletAddress,
       amount,
-      undefined,
+      settlementToken,
       undefined,
       merchantEnsName ?? undefined,
     );
@@ -483,7 +536,14 @@ export default function MerchantScreen() {
     } finally {
       isStartingSessionRef.current = false;
     }
-  }, [amountInput, merchantEnsName, screenState, smartWalletAddress, walletReady]);
+  }, [
+    amountInput,
+    merchantEnsName,
+    resolveMerchantSettlementToken,
+    screenState,
+    smartWalletAddress,
+    walletReady,
+  ]);
 
   useEffect(() => {
     if (
@@ -551,6 +611,9 @@ export default function MerchantScreen() {
     return amountInput || "0.00";
   }, [amountInput, session]);
 
+  const activeSettlementToken = session?.tokenAddress ?? merchantSettlementToken;
+  const settlementTokenSymbol = getTokenSymbolByAddress(activeSettlementToken, TOKEN_SYMBOL);
+
   const backgroundColor = COLORS.green400;
 
   return (
@@ -559,11 +622,11 @@ export default function MerchantScreen() {
         {/* Amount Display */}
         <View style={styles.amountBoxShadow}>
           <View style={styles.amountBox}>
-            <Text style={styles.amountLabel}>AMOUNT ({TOKEN_SYMBOL})</Text>
+            <Text style={styles.amountLabel}>AMOUNT ({settlementTokenSymbol})</Text>
             <Text style={styles.amountText}>{displayAmount}</Text>
             {session && (
               <Text style={styles.tokenHint}>
-                {formatPaymentAmount(session.amount)} {TOKEN_SYMBOL}
+                {formatPaymentAmount(session.amount)} {settlementTokenSymbol}
               </Text>
             )}
           </View>

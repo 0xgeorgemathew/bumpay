@@ -15,7 +15,6 @@ import {
 } from "../nfc/protocol";
 import {
   CHAIN_ID,
-  TOKEN_ADDRESS,
   VERIFIER_ADDRESS,
 } from "../blockchain/contracts";
 import type { PaymentAuthorization } from "../blockchain/eip712-signing";
@@ -58,7 +57,7 @@ export function generateMerchantRequestId(): string {
 export function createMerchantSession(
   merchantAddress: Address,
   amount: bigint,
-  tokenAddress: Address = TOKEN_ADDRESS,
+  tokenAddress: Address,
   deadlineSeconds: number = 300,
   merchantName?: string,
 ): MerchantSession {

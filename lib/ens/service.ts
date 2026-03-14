@@ -427,11 +427,6 @@ export async function writeEnsProfile(
  * Returns null if valid, or an error message if invalid
  */
 export function validateProfileForPayment(profile: BumpEnsProfile): string | null {
-  // Check mode
-  if (profile.mode === "merchant") {
-    return "Merchant mode is not yet supported";
-  }
-
   // Check default asset exists
   if (!profile.defaultAsset) {
     return "Recipient has not set up payment preferences";
