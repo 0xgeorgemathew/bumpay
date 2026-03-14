@@ -7,6 +7,7 @@ import {
 } from "@privy-io/expo";
 import * as Haptics from "expo-haptics";
 import { LogoBox } from "../../components/LogoBox";
+import { TokenApprovalsCard } from "../../components/TokenApprovalsCard";
 import { UserCard } from "../../components/UserCard";
 import { WalletSetupCard } from "../../components/WalletSetupCard";
 import { COLORS, BORDER_THICK, BORDER_THIN, SHADOW } from "../../constants/theme";
@@ -69,6 +70,11 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>WALLET SETUP</Text>
           <WalletSetupCard />
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>MERCHANT APPROVALS</Text>
+          <TokenApprovalsCard />
         </View>
 
         <View style={styles.footer}>

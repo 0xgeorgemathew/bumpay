@@ -45,7 +45,7 @@ export function ActionButtons({
             payPressed && styles.buttonPressed,
           ]}
         >
-          <Ionicons name="cash" size={32} color={COLORS.textPrimary} />
+          <Ionicons name="cash" size={28} color={COLORS.textPrimary} />
           <Text style={[styles.buttonText, styles.payButtonText]}>PAY</Text>
         </Pressable>
       </View>
@@ -62,7 +62,7 @@ export function ActionButtons({
             receivePressed && styles.buttonPressed,
           ]}
         >
-          <Ionicons name="arrow-down" size={32} color={COLORS.textInverted} />
+          <Ionicons name="arrow-down" size={28} color={COLORS.textInverted} />
           <Text style={[styles.buttonText, styles.receiveButtonText]}>RECEIVE</Text>
         </Pressable>
       </View>
@@ -73,20 +73,20 @@ export function ActionButtons({
 const styles = StyleSheet.create({
   container: {
     flexDirection: "row",
-    gap: 16,
+    gap: 12,
   },
   buttonShadow: {
     flex: 1,
     backgroundColor: COLORS.border,
   },
   button: {
-    paddingVertical: 20,
+    paddingVertical: 16,
     alignItems: "center",
     justifyContent: "center",
-    gap: 6,
+    gap: 4,
     borderWidth: BORDER_THICK.width,
     borderColor: COLORS.border,
-    transform: [{ translateX: -8 }, { translateY: -8 }],
+    transform: [{ translateX: -6 }, { translateY: -6 }],
   },
   buttonDisabled: {
     opacity: 0.5,
@@ -101,7 +101,7 @@ const styles = StyleSheet.create({
     transform: [{ translateX: 0 }, { translateY: 0 }],
   },
   buttonText: {
-    fontSize: 20,
+    fontSize: 14,
     fontWeight: "900",
     textTransform: "uppercase",
     fontStyle: "italic",

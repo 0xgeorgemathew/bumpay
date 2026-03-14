@@ -38,6 +38,8 @@ export default function RootLayout() {
                 <Stack.Screen name="(tabs)" />
                 <Stack.Screen name="pay" />
                 <Stack.Screen name="pay-nfc" />
+                <Stack.Screen name="merchant" />
+                <Stack.Screen name="pay-merchant" />
                 <Stack.Screen name="receive" />
                 <Stack.Screen name="payment-success" />
                 <Stack.Screen name="ens-onboarding" />

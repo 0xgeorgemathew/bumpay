@@ -115,6 +115,23 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="merchant"
+        options={{
+          title: "Merchant",
+          tabBarIcon: ({ focused }) => (
+            <View style={focused ? styles.iconShadow : null}>
+              <View style={[styles.iconContainer, focused && styles.iconContainerActive]}>
+                <Ionicons
+                  name="card"
+                  size={24}
+                  color={focused ? COLORS.textInverted : COLORS.textPrimary}
+                />
+              </View>
+            </View>
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="settings"
         options={{
           title: "Settings",
