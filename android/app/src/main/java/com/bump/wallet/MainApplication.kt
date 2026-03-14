@@ -14,8 +14,6 @@ import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint
 import expo.modules.ApplicationLifecycleDispatcher
 import expo.modules.ExpoReactHostFactory
 
-import com.bump.wallet.nfc.NfcPackage
-
 class MainApplication : Application(), ReactApplication {
 
   override val reactHost: ReactHost by lazy {
@@ -25,7 +23,6 @@ class MainApplication : Application(), ReactApplication {
         PackageList(this).packages.apply {
           // Packages that cannot be autolinked yet can be added manually here, for example:
           // add(MyReactNativePackage())
-          add(NfcPackage())
         }
     )
   }
