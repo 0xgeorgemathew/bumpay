@@ -652,7 +652,7 @@ export default function ReceiveScreen() {
           </View>
         ) : null}
 
-        {walletStatus === "ready" && !verifiedEnsName ? (
+        {walletStatus === "ready" && ensCheckComplete && !verifiedEnsName ? (
           <View style={styles.footerButtonShadow}>
             <Pressable onPress={handleOpenEnsOnboarding} style={styles.warningButton}>
               <Text style={styles.footerButtonText}>OPEN ENS ONBOARDING</Text>

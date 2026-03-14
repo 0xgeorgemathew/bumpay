@@ -66,6 +66,7 @@ export default function EnsOnboardingScreen() {
   const [profileSyncStatus, setProfileSyncStatus] = useState<ProfileSyncStatus>("idle");
   const [usernameInput, setUsernameInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [isInitialEnsCheckPending, setIsInitialEnsCheckPending] = useState(true);
 
   // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -106,41 +107,79 @@ export default function EnsOnboardingScreen() {
 
   // Check if already has ENS on mount
   useEffect(() => {
-    const checkExistingEns = async () => {
-      if (smartWalletAddress) {
-        try {
-          const status = await getEnsClaimStatus(smartWalletAddress);
-          if (status.hasClaim && status.fullName) {
-            const onchainProfile = status.label
-              ? await readEnsProfileByLabel(status.label)
-              : null;
+    let cancelled = false;
 
+    const checkExistingEns = async () => {
+      if (!user) {
+        if (!cancelled) {
+          setIsInitialEnsCheckPending(false);
+        }
+        return;
+      }
+
+      if (walletStatus === "creating_embedded" || walletStatus === "creating_smart") {
+        if (!cancelled) {
+          setIsInitialEnsCheckPending(true);
+        }
+        return;
+      }
+
+      if (walletStatus !== "ready" || !smartWalletAddress) {
+        if (!cancelled) {
+          setIsInitialEnsCheckPending(false);
+        }
+        return;
+      }
+
+      if (!cancelled) {
+        setIsInitialEnsCheckPending(true);
+      }
+
+      try {
+        const status = await getEnsClaimStatus(smartWalletAddress);
+        if (status.hasClaim && status.fullName) {
+          const onchainProfile = status.label
+            ? await readEnsProfileByLabel(status.label)
+            : null;
+
+          if (!cancelled) {
             setDraft(
               onchainProfile ?? {
                 ...DEFAULT_BUMP_ENS_PROFILE,
                 ensName: status.fullName,
               },
             );
+          }
 
-            if (onchainProfile) {
-              router.replace("/(tabs)");
-              return;
-            }
-
-            setCurrentStep("mode");
+          if (onchainProfile) {
+            router.replace("/(tabs)");
             return;
           }
 
-          if (status.hasClaim) {
-            router.replace("/(tabs)");
+          if (!cancelled) {
+            setCurrentStep("mode");
           }
-        } catch {
-          // Continue with onboarding
+          return;
+        }
+
+        if (status.hasClaim) {
+          router.replace("/(tabs)");
+          return;
+        }
+      } catch {
+        // Continue with onboarding
+      } finally {
+        if (!cancelled) {
+          setIsInitialEnsCheckPending(false);
         }
       }
     };
     checkExistingEns();
-  }, [smartWalletAddress, router, setDraft]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router, setDraft, smartWalletAddress, user, walletStatus]);
 
   // Entrance animations
   useEffect(() => {
@@ -448,6 +487,20 @@ export default function EnsOnboardingScreen() {
     outputRange: [0, -10],
   });
 
+  if (isInitialEnsCheckPending) {
+    return (
+      <View style={[styles.loadingContainer, { paddingTop: insets.top }]}>
+        <View style={styles.loadingCardShadow}>
+          <View style={styles.loadingCard}>
+            <ActivityIndicator size="large" color={COLORS.textPrimary} />
+            <Text style={styles.loadingTitle}>OPENING BUMP WALLET</Text>
+            <Text style={styles.loadingSubtitle}>Checking your ENS profile...</Text>
+          </View>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Decorative Background Elements */}
@@ -536,7 +589,7 @@ export default function EnsOnboardingScreen() {
 
               {/* Welcome Text */}
               <View style={styles.welcomeTextSection}>
-                <Text style={styles.welcomeLabel}>WELCOME TO</Text>
+                <Text style={styles.welcomeLabel}>WELCOME TO BUMP WALLET</Text>
                 <View style={styles.logoBox}>
                   <Text style={styles.logoText}>BUMP</Text>
                 </View>
@@ -553,7 +606,7 @@ export default function EnsOnboardingScreen() {
                   <View style={styles.featureContent}>
                     <Text style={styles.featureTitle}>CLAIM YOUR NAME</Text>
                     <Text style={styles.featureDescription}>
-                      Claim your Bump name before entering the app. Other people can pay you using just your name.
+                      Claim your Bump Wallet name before entering the app. Other people can pay you using just your name.
                     </Text>
                   </View>
                 </View>
@@ -608,7 +661,7 @@ export default function EnsOnboardingScreen() {
                 </View>
                 <Text style={styles.claimTitle}>Choose Your Username</Text>
                 <Text style={styles.claimSubtitle}>
-                  This will be your payment name inside Bump. Make it memorable.
+                  This will be your payment name inside Bump Wallet. Make it memorable.
                 </Text>
               </View>
 
@@ -737,7 +790,7 @@ export default function EnsOnboardingScreen() {
                     <Ionicons name="person-circle" size={36} color={COLORS.textInverted} />
                   </View>
                 </View>
-                <Text style={styles.claimTitle}>How Will You Use Bump?</Text>
+                <Text style={styles.claimTitle}>How Will You Use Bump Wallet?</Text>
                 <Text style={styles.claimSubtitle}>
                   Pick the profile that fits you best. You can change this later.
                 </Text>
@@ -817,7 +870,7 @@ export default function EnsOnboardingScreen() {
                     <Ionicons name="information-circle" size={12} color={COLORS.textInverted} />
                   </View>
                   <Text style={styles.infoText}>
-                    This helps Bump know how to present your profile to other users.
+                    This helps Bump Wallet know how to present your profile to other users.
                   </Text>
                 </View>
               </View>
@@ -916,7 +969,7 @@ export default function EnsOnboardingScreen() {
                 </View>
                 <Text style={styles.claimTitle}>Finish Your Profile</Text>
                 <Text style={styles.claimSubtitle}>
-                  Save your name and payment preferences so you are ready to use Bump.
+                  Save your name and payment preferences so you are ready to use Bump Wallet.
                 </Text>
               </View>
 
@@ -1021,7 +1074,7 @@ export default function EnsOnboardingScreen() {
                 onPress={handleFinish}
               >
                 <Ionicons name="arrow-forward" size={20} color={COLORS.textInverted} />
-                <Text style={styles.primaryButtonText}>START USING BUMP</Text>
+                <Text style={styles.primaryButtonText}>START USING BUMP WALLET</Text>
               </Pressable>
             </View>
           )}
@@ -1032,6 +1085,38 @@ export default function EnsOnboardingScreen() {
 }
 
 const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: COLORS.primaryBlue,
+    paddingHorizontal: 24,
+    justifyContent: "center",
+  },
+  loadingCardShadow: {
+    backgroundColor: COLORS.border,
+  },
+  loadingCard: {
+    backgroundColor: COLORS.surface,
+    borderWidth: BORDER_THICK.width,
+    borderColor: COLORS.border,
+    paddingHorizontal: 24,
+    paddingVertical: 28,
+    alignItems: "center",
+    gap: 12,
+    transform: [{ translateX: -8 }, { translateY: -8 }],
+  },
+  loadingTitle: {
+    fontSize: 20,
+    fontWeight: "900",
+    color: COLORS.textPrimary,
+    letterSpacing: 1,
+    textAlign: "center",
+  },
+  loadingSubtitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: COLORS.textMuted,
+    textAlign: "center",
+  },
   container: {
     flex: 1,
     backgroundColor: COLORS.primaryBlue,
