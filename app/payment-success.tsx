@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { View, Text, StyleSheet, Pressable, Linking } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { COLORS, BORDER_THICK } from "../constants/theme";
 import { formatPaymentAmount } from "../lib/payments/tracking";
-import { playPaymentSuccessSound } from "../lib/audio/feedback";
+import { playDisconnectBeepAsync, playPaymentSuccessSoundAsync } from "../lib/audio/feedback";
+import { announcePaymentReceivedAsync } from "../lib/audio/announce";
 import { useOperationalWallet } from "../lib/wallet";
-import { syncLedgerEntry } from "../lib/fileverse";
 import { useTransactions } from "../lib/transaction-context";
 
 function shortAddress(address?: string) {
@@ -14,7 +14,35 @@ function shortAddress(address?: string) {
     return "UNKNOWN";
   }
 
-  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+  return `${address.slice(0, 10)}...${address.slice(-8)}`;
+}
+
+// PartyBox component for clear FROM/TO display
+function PartyBox({
+  label,
+  name,
+  isYou,
+  highlightColor,
+  address,
+}: {
+  label: "FROM" | "TO";
+  name: string;
+  isYou: boolean;
+  highlightColor?: string;
+  address?: string;
+}) {
+  const bgColor = isYou ? highlightColor : COLORS.surface;
+  return (
+    <View style={styles.partyBoxShadow}>
+      <View style={[styles.partyBox, { backgroundColor: bgColor }]}>
+        <Text style={styles.partyLabel}>{label}</Text>
+        <Text style={styles.partyName}>{isYou ? "YOU" : name}</Text>
+        {!isYou && address && (
+          <Text style={styles.partyAddress}>{shortAddress(address)}</Text>
+        )}
+      </View>
+    </View>
+  );
 }
 
 export default function PaymentSuccessScreen() {
@@ -22,14 +50,7 @@ export default function PaymentSuccessScreen() {
   const { smartWalletAddress } = useOperationalWallet();
   const { addTransaction } = useTransactions();
   const addedToRecentActivityRef = useRef<string | null>(null);
-  const syncedKeyRef = useRef<string | null>(null);
-  const [ledgerState, setLedgerState] = useState<{
-    status: "idle" | "syncing" | "synced" | "error";
-    message: string;
-  }>({
-    status: "idle",
-    message: "Saving this receipt to your private Fileverse ledger.",
-  });
+
   const params = useLocalSearchParams<{
     role?: string;
     from?: string;
@@ -52,10 +73,34 @@ export default function PaymentSuccessScreen() {
     });
   }, [params.amount]);
 
+  const isReceiver = params.role === "receiver";
+  const backgroundColor = isReceiver ? COLORS.green400 : COLORS.primaryBlue;
+
+  // Determine party details for FROM → TO display
+  const fromName = params.fromLabel ?? "Unknown";
+  const toName = params.toLabel ?? "Unknown";
+
+  // Color coding: when YOU are receiver → TO box is green, when YOU are payer → FROM box is yellow
+  const highlightColor = isReceiver ? COLORS.green400 : COLORS.yellow400;
+
+  // Play audio sequence on mount for BOTH phones, voice only for merchant
   useEffect(() => {
-    playPaymentSuccessSound().catch(console.error);
+    // Step 1: Disconnect beep (both phones) - plays immediately, lower volume
+    playDisconnectBeepAsync()
+      .then(() => {
+        // Step 2: Success beep (both phones) - LOUD confirmation
+        return playPaymentSuccessSoundAsync();
+      })
+      .then(() => {
+        // Step 3: Voice announcement (merchant only)
+        if (isReceiver && params.amount && params.tokenSymbol) {
+          return announcePaymentReceivedAsync(formattedAmount, params.tokenSymbol!);
+        }
+      })
+      .catch(console.error);
   }, []);
 
+  // Add to transaction history
   useEffect(() => {
     const activityKey = `${smartWalletAddress ?? "unknown"}:${params.role ?? "unknown"}:${params.txHash ?? "unknown"}`;
 
@@ -112,81 +157,6 @@ export default function PaymentSuccessScreen() {
     smartWalletAddress,
   ]);
 
-  useEffect(() => {
-    const syncKey = `${smartWalletAddress ?? "unknown"}:${params.role ?? "unknown"}:${params.txHash ?? "unknown"}`;
-
-    if (
-      !smartWalletAddress ||
-      !params.role ||
-      !params.from ||
-      !params.to ||
-      !params.amount ||
-      !params.tokenSymbol ||
-      !params.chainName ||
-      !params.txHash ||
-      syncedKeyRef.current === syncKey
-    ) {
-      return;
-    }
-
-    syncedKeyRef.current = syncKey;
-    setLedgerState({
-      status: "syncing",
-      message: "Saving this receipt to your private Fileverse ledger.",
-    });
-
-    // Store params with definite values for use in callbacks
-    const txRole = params.role === "receiver" ? "receiver" : "payer";
-    const txFrom = params.from as `0x${string}`;
-    const txTo = params.to as `0x${string}`;
-    const txAmount = BigInt(params.amount);
-    const txTokenSymbol = params.tokenSymbol;
-    const txChainName = params.chainName;
-    const txTxHash = params.txHash as `0x${string}`;
-    const txFromLabel = params.fromLabel;
-    const txToLabel = params.toLabel;
-
-    syncLedgerEntry({
-      ownerAddress: smartWalletAddress,
-      role: txRole,
-      amount: txAmount,
-      tokenSymbol: txTokenSymbol,
-      chainName: txChainName,
-      txHash: txTxHash,
-      from: txFrom,
-      to: txTo,
-      fromLabel: txFromLabel ?? null,
-      toLabel: txToLabel ?? null,
-    })
-      .then(() => {
-        setLedgerState({
-          status: "synced",
-          message: "Saved to your private Fileverse ledger.",
-        });
-      })
-      .catch((error) => {
-        console.warn("Failed to sync Fileverse ledger:", error);
-        setLedgerState({
-          status: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : "Payment confirmed, but ledger sync failed.",
-        });
-      });
-  }, [
-    params.amount,
-    params.chainName,
-    params.from,
-    params.fromLabel,
-    params.role,
-    params.to,
-    params.toLabel,
-    params.tokenSymbol,
-    params.txHash,
-    smartWalletAddress,
-  ]);
-
   const handleDone = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     router.replace("/(tabs)");
@@ -201,63 +171,67 @@ export default function PaymentSuccessScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor }]}>
       <View style={styles.mainContent}>
-        <View style={styles.contentStack}>
-          <View style={styles.heroShadow}>
-            <View style={styles.hero}>
-              <Text style={styles.heroIcon}>✓</Text>
-              <Text style={styles.heroTitle}>PAYMENT CONFIRMED</Text>
-              <Text style={styles.heroSubtitle}>
-                {params.role === "receiver" ? "RECEIVED" : "SENT"} {formattedAmount}{" "}
-                {params.tokenSymbol ?? "USDC"}
-              </Text>
-            </View>
-          </View>
+        <View style={styles.cardShadow}>
+          <View style={styles.card}>
+            <Text style={styles.checkmark}>✓</Text>
+            <Text style={styles.title}>
+              {isReceiver ? "PAYMENT RECEIVED" : "PAYMENT SENT"}
+            </Text>
 
-          <View style={styles.detailShadow}>
-            <View style={styles.detailCard}>
-              <Text style={styles.detailLabel}>PAYER</Text>
-              <Text style={styles.detailValue}>
-                {params.fromLabel ?? shortAddress(params.from)}
-              </Text>
-              <Text style={styles.detailLabel}>RECEIVER</Text>
-              <Text style={styles.detailValue}>
-                {params.toLabel ?? shortAddress(params.to)}
-              </Text>
-              <Text style={styles.detailLabel}>TX HASH</Text>
-              <Text style={styles.detailValue}>{shortAddress(params.txHash)}</Text>
-              <Text style={styles.detailLabel}>BLOCK</Text>
-              <Text style={styles.detailValue}>{params.blockNumber ?? "UNKNOWN"}</Text>
-              <Text style={styles.detailLabel}>CHAIN</Text>
-              <Text style={styles.detailValue}>{params.chainName ?? "Base Sepolia"}</Text>
+            <View style={styles.amountBoxShadow}>
+              <View style={styles.amountBox}>
+                <Text style={styles.amountText}>
+                  {formattedAmount} {params.tokenSymbol ?? "USDC"}
+                </Text>
+              </View>
             </View>
-          </View>
 
-          <View style={styles.ledgerShadow}>
-            <View
-              style={[
-                styles.ledgerCard,
-                ledgerState.status === "error" && styles.ledgerCardWarning,
-              ]}
-            >
-              <Text style={styles.ledgerLabel}>PRIVATE LEDGER</Text>
-              <Text style={styles.ledgerText}>{ledgerState.message}</Text>
+            {/* FROM → TO Visual Layout */}
+            <View style={styles.flowContainer}>
+              {/* FROM Box */}
+              <PartyBox
+                label="FROM"
+                name={fromName}
+                isYou={!isReceiver}
+                highlightColor={highlightColor}
+                address={isReceiver ? params.from : undefined}
+              />
+
+              {/* Direction Arrow */}
+              <View style={styles.arrowContainer}>
+                <Text style={styles.arrow}>↓</Text>
+              </View>
+
+              {/* TO Box */}
+              <PartyBox
+                label="TO"
+                name={toName}
+                isYou={isReceiver}
+                highlightColor={highlightColor}
+                address={!isReceiver ? params.to : undefined}
+              />
             </View>
+
+            <Pressable onPress={handleOpenExplorer}>
+              <Text style={styles.txHash}>
+                {shortAddress(params.txHash)}
+              </Text>
+            </Pressable>
           </View>
         </View>
       </View>
 
       <View style={styles.footerStack}>
         <View style={styles.buttonShadow}>
-          <Pressable onPress={handleOpenExplorer} style={styles.secondaryButton}>
-            <Text style={styles.secondaryButtonText}>VIEW ON EXPLORER</Text>
+          <Pressable style={styles.explorerButton} onPress={handleOpenExplorer}>
+            <Text style={styles.buttonText}>VIEW ON EXPLORER</Text>
           </Pressable>
         </View>
-
         <View style={styles.buttonShadow}>
-          <Pressable onPress={handleDone} style={styles.primaryButton}>
-            <Text style={styles.primaryButtonText}>DONE</Text>
+          <Pressable style={styles.doneButton} onPress={handleDone}>
+            <Text style={styles.buttonText}>DONE</Text>
           </Pressable>
         </View>
       </View>
@@ -268,135 +242,133 @@ export default function PaymentSuccessScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.green400,
     paddingHorizontal: 16,
-    paddingTop: 40,
-    paddingBottom: 20,
+    paddingTop: 60,
+    paddingBottom: 24,
   },
   mainContent: {
     flex: 1,
     justifyContent: "center",
   },
-  contentStack: {
-    gap: 16,
-  },
-  heroShadow: {
+  cardShadow: {
     backgroundColor: COLORS.border,
-    marginBottom: 16,
   },
-  hero: {
+  card: {
     backgroundColor: COLORS.surface,
     borderWidth: BORDER_THICK.width,
     borderColor: COLORS.border,
+    paddingVertical: 24,
+    paddingHorizontal: 20,
     alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 20,
-    gap: 6,
+    gap: 12,
     transform: [{ translateX: -8 }, { translateY: -8 }],
   },
-  heroIcon: {
+  checkmark: {
     fontSize: 48,
     fontWeight: "900",
     color: COLORS.success,
   },
-  heroTitle: {
-    fontSize: 24,
+  title: {
+    fontSize: 20,
     fontWeight: "900",
-    color: COLORS.textPrimary,
-    textAlign: "center",
     fontStyle: "italic",
-  },
-  heroSubtitle: {
-    fontSize: 16,
-    fontWeight: "900",
     color: COLORS.textPrimary,
-    textAlign: "center",
+    letterSpacing: 2,
   },
-  detailShadow: {
+  amountBoxShadow: {
     backgroundColor: COLORS.border,
-    marginBottom: 16,
   },
-  detailCard: {
-    backgroundColor: COLORS.surface,
-    borderWidth: BORDER_THICK.width,
-    borderColor: COLORS.border,
-    paddingHorizontal: 18,
-    paddingVertical: 14,
-    transform: [{ translateX: -8 }, { translateY: -8 }],
-  },
-  detailLabel: {
-    fontSize: 11,
-    fontWeight: "900",
-    color: COLORS.textPrimary,
-    letterSpacing: 1,
-    marginTop: 8,
-  },
-  detailValue: {
-    fontSize: 16,
-    fontWeight: "900",
-    color: COLORS.textPrimary,
-  },
-  ledgerShadow: {
-    backgroundColor: COLORS.border,
-    marginBottom: 16,
-  },
-  ledgerCard: {
-    backgroundColor: COLORS.cyan400,
-    borderWidth: BORDER_THICK.width,
-    borderColor: COLORS.border,
-    paddingHorizontal: 18,
-    paddingVertical: 14,
-    transform: [{ translateX: -8 }, { translateY: -8 }],
-    gap: 6,
-  },
-  ledgerCardWarning: {
+  amountBox: {
     backgroundColor: COLORS.yellow400,
+    borderWidth: BORDER_THICK.width,
+    borderColor: COLORS.border,
+    paddingVertical: 10,
+    paddingHorizontal: 24,
+    transform: [{ translateX: -4 }, { translateY: -4 }],
   },
-  ledgerLabel: {
-    fontSize: 11,
+  amountText: {
+    fontSize: 22,
     fontWeight: "900",
     color: COLORS.textPrimary,
-    letterSpacing: 1,
   },
-  ledgerText: {
-    fontSize: 14,
-    fontWeight: "800",
+  flowContainer: {
+    width: "100%",
+    alignItems: "center",
+    gap: 2,
+  },
+  partyBoxShadow: {
+    backgroundColor: COLORS.border,
+    width: "100%",
+  },
+  partyBox: {
+    borderWidth: BORDER_THICK.width,
+    borderColor: COLORS.border,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    alignItems: "center",
+    transform: [{ translateX: -3 }, { translateY: -3 }],
+  },
+  partyLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: COLORS.textMuted,
+    letterSpacing: 2,
+    textTransform: "uppercase",
+  },
+  partyName: {
+    fontSize: 20,
+    fontWeight: "900",
     color: COLORS.textPrimary,
-    lineHeight: 20,
+    marginTop: 2,
+  },
+  partyAddress: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: COLORS.textMuted,
+    fontFamily: "monospace",
+    marginTop: 2,
+  },
+  arrowContainer: {
+    paddingVertical: 2,
+  },
+  arrow: {
+    fontSize: 20,
+    fontWeight: "900",
+    color: COLORS.textPrimary,
+  },
+  txHash: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: COLORS.primaryBlue,
+    textDecorationLine: "underline",
+    fontFamily: "monospace",
+  },
+  footerStack: {
+    gap: 8,
   },
   buttonShadow: {
     backgroundColor: COLORS.border,
-    marginBottom: 12,
   },
-  footerStack: {
-    width: "100%",
-  },
-  secondaryButton: {
+  explorerButton: {
     backgroundColor: COLORS.yellow400,
     borderWidth: BORDER_THICK.width,
     borderColor: COLORS.border,
-    paddingVertical: 15,
+    paddingVertical: 14,
     alignItems: "center",
-    transform: [{ translateX: -8 }, { translateY: -8 }],
+    transform: [{ translateX: -6 }, { translateY: -6 }],
   },
-  primaryButton: {
-    backgroundColor: COLORS.primaryBlue,
+  doneButton: {
+    backgroundColor: COLORS.surface,
     borderWidth: BORDER_THICK.width,
     borderColor: COLORS.border,
-    paddingVertical: 15,
+    paddingVertical: 14,
     alignItems: "center",
-    transform: [{ translateX: -8 }, { translateY: -8 }],
+    transform: [{ translateX: -6 }, { translateY: -6 }],
   },
-  secondaryButtonText: {
+  buttonText: {
     fontSize: 16,
     fontWeight: "900",
     color: COLORS.textPrimary,
-    letterSpacing: 1,
-  },
-  primaryButtonText: {
-    fontSize: 16,
-    fontWeight: "900",
-    color: COLORS.textInverted,
     letterSpacing: 1,
   },
 });

@@ -36,7 +36,7 @@ export default function MerchantTabScreen() {
               ]}
             >
               <View style={styles.iconContainer}>
-                <Ionicons name="cart" size={32} color={COLORS.textPrimary} />
+                <Ionicons name="cart" size={36} color={COLORS.textPrimary} />
               </View>
               <View style={styles.buttonTextContainer}>
                 <Text style={styles.buttonTitle}>REQUEST PAYMENT</Text>
@@ -54,7 +54,7 @@ export default function MerchantTabScreen() {
               ]}
             >
               <View style={styles.iconContainer}>
-                <Ionicons name="arrow-up" size={32} color={COLORS.textPrimary} />
+                <Ionicons name="arrow-up" size={36} color={COLORS.textPrimary} />
               </View>
               <View style={styles.buttonTextContainer}>
                 <Text style={[styles.buttonTitle, styles.payButtonTitle]}>PAY MERCHANT</Text>
@@ -63,17 +63,6 @@ export default function MerchantTabScreen() {
                 </Text>
               </View>
             </Pressable>
-          </View>
-        </View>
-
-        <View style={styles.infoBoxShadow}>
-          <View style={styles.infoBox}>
-            <Text style={styles.infoLabel}>HOW IT WORKS</Text>
-            <Text style={styles.infoText}>
-              Use NFC to process tap-to-pay transactions between the merchant and customer devices.
-              The merchant publishes a payment request and the customer completes the payment flow by
-              tap.
-            </Text>
           </View>
         </View>
       </View>
@@ -99,9 +88,9 @@ const styles = StyleSheet.create({
   button: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 20,
-    paddingHorizontal: 20,
-    gap: 16,
+    paddingVertical: 28,
+    paddingHorizontal: 24,
+    gap: 20,
     borderWidth: BORDER_THICK.width,
     borderColor: COLORS.border,
     transform: [{ translateX: -SHADOW_OFFSET.width }, { translateY: -SHADOW_OFFSET.height }],
@@ -116,8 +105,8 @@ const styles = StyleSheet.create({
     transform: [{ translateX: 0 }, { translateY: 0 }],
   },
   iconContainer: {
-    width: 56,
-    height: 56,
+    width: 64,
+    height: 64,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: BORDER_THICK.width,
@@ -126,16 +115,16 @@ const styles = StyleSheet.create({
   },
   buttonTextContainer: {
     flex: 1,
-    gap: 4,
+    gap: 6,
   },
   buttonTitle: {
-    fontSize: 18,
+    fontSize: 22,
     fontWeight: "900",
     color: COLORS.textInverted,
     letterSpacing: 1,
   },
   buttonSubtitle: {
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: "700",
     color: COLORS.textInverted,
     opacity: 0.8,
@@ -146,29 +135,5 @@ const styles = StyleSheet.create({
   payButtonSubtitle: {
     color: COLORS.textInverted,
     opacity: 0.8,
-  },
-  infoBoxShadow: {
-    backgroundColor: COLORS.border,
-    marginTop: 24,
-  },
-  infoBox: {
-    backgroundColor: COLORS.surface,
-    borderWidth: BORDER_THICK.width,
-    borderColor: COLORS.border,
-    padding: 20,
-    transform: [{ translateX: -SHADOW_OFFSET.width }, { translateY: -SHADOW_OFFSET.height }],
-  },
-  infoLabel: {
-    fontSize: 12,
-    fontWeight: "900",
-    color: COLORS.textPrimary,
-    letterSpacing: 2,
-    marginBottom: 10,
-  },
-  infoText: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: COLORS.textPrimary,
-    lineHeight: 22,
   },
 });

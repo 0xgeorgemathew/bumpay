@@ -5,16 +5,18 @@ import {
   StyleSheet,
   Pressable,
   ActivityIndicator,
-  Linking,
   Platform,
+  Animated,
+  Easing,
 } from "react-native";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { usePrivy } from "@privy-io/expo";
-import { parseUnits, formatUnits, type Hex } from "viem";
+import { parseUnits, formatUnits } from "viem";
 import { COLORS, BORDER_THICK } from "../constants/theme";
 import { useOperationalWallet } from "../lib/wallet";
-import { playNfcDoneSound, playPaymentSuccessSoundAsync } from "../lib/audio/feedback";
+import { playNfcDoneSound } from "../lib/audio/feedback";
 import { CardEmulation, CardEmulationEvents } from "../lib/nfc/card-emulation";
 import { getEnsClaimStatus } from "../lib/ens/service";
 import {
@@ -23,7 +25,6 @@ import {
   TOKEN_SYMBOL,
   getTokenSymbolByAddress,
 } from "../lib/blockchain/contracts";
-import { announcePaymentReceivedAsync } from "../lib/audio/announce";
 import {
   buildClaimPaymentTransaction,
   buildMerchantPaymentRequestMessage,
@@ -35,14 +36,13 @@ import {
   type ParsedAuthorization,
 } from "../lib/payments/merchant-session";
 import { getPaymentTrackingPollingClient } from "../lib/payments/payment-tracking-client";
-import { buildPaymentExplorerUrl } from "../lib/payments/payment-tracking-types";
+import { buildSuccessRouteParams } from "../lib/payments/tracking";
 import { useTransactions } from "../lib/transaction-context";
 
 type MerchantScreenState =
   | "enter_amount"
   | "ready_to_receive"
   | "claiming_payment"
-  | "success"
   | "error";
 
 type MerchantError =
@@ -88,8 +88,6 @@ function getStatusLabel(state: MerchantScreenState, error?: MerchantError): stri
       return "READY TO RECEIVE";
     case "claiming_payment":
       return "CLAIMING PAYMENT";
-    case "success":
-      return "PAYMENT SUCCESSFUL";
     case "error":
       return `ERROR: ${error?.toUpperCase().replace(/_/g, " ") ?? "UNKNOWN"}`;
   }
@@ -103,6 +101,92 @@ const KEYPAD_ROWS = [
   ["7", "8", "9"],
   [".", "0", "backspace"],
 ];
+
+// NfcIcon - NFC icon component
+function NfcIcon({ size = 48, color = "#fff" }: { size?: number; color?: string }) {
+  return <MaterialCommunityIcons name="nfc" size={size} color={color} />;
+}
+
+// AnimatedWaveBars - 5 bars animating in wave pattern
+function AnimatedWaveBars({ isAnimating = true }: { isAnimating?: boolean }) {
+  const barHeights = [32, 48, 64, 48, 32];
+  const anims = useRef(barHeights.map(() => new Animated.Value(1))).current;
+
+  useEffect(() => {
+    if (!isAnimating) {
+      anims.forEach((anim) => anim.setValue(1));
+      return;
+    }
+
+    const animations = anims.map((anim, index) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(index * 150),
+          Animated.timing(anim, {
+            toValue: 1.5,
+            duration: 600,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+          Animated.timing(anim, {
+            toValue: 0.5,
+            duration: 600,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+          Animated.timing(anim, {
+            toValue: 1,
+            duration: 600,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+        ]),
+      ),
+    );
+
+    animations.forEach((animation) => animation.start());
+    return () => animations.forEach((animation) => animation.stop());
+  }, [anims, isAnimating]);
+
+  return (
+    <View style={styles.waveBars}>
+      {barHeights.map((height, index) => (
+        <Animated.View
+          key={index}
+          style={[styles.waveBar, { height, transform: [{ scaleY: anims[index] }] }]}
+        />
+      ))}
+    </View>
+  );
+}
+
+// DotsPattern - Decorative dot overlay
+function DotsPattern() {
+  const dotSize = 4;
+  const gap = 16;
+  const dots = [];
+
+  for (let row = 0; row < 20; row += 1) {
+    for (let column = 0; column < 20; column += 1) {
+      dots.push(
+        <View
+          key={`${row}-${column}`}
+          style={{
+            position: "absolute",
+            left: column * gap + gap / 2 - dotSize / 2,
+            top: row * gap + gap / 2 - dotSize / 2,
+            width: dotSize,
+            height: dotSize,
+            borderRadius: dotSize / 2,
+            backgroundColor: COLORS.border,
+          }}
+        />,
+      );
+    }
+  }
+
+  return <View style={styles.dotsOverlay}>{dots}</View>;
+}
 
 export default function MerchantScreen() {
   const router = useRouter();
@@ -119,7 +203,6 @@ export default function MerchantScreen() {
   const [pressedKey, setPressedKey] = useState<string | null>(null);
   const [errorType, setErrorType] = useState<MerchantError | undefined>();
   const [session, setSession] = useState<MerchantSession | null>(null);
-  const [claimTxHash, setClaimTxHash] = useState<Hex | null>(null);
   const [merchantEnsName, setMerchantEnsName] = useState<string | null>(null);
   const [customerEnsName, setCustomerEnsName] = useState<string | null>(null);
   const [customerAddress, setCustomerAddress] = useState<string | null>(null);
@@ -200,7 +283,11 @@ export default function MerchantScreen() {
   };
 
   const handleClaimPayment = useCallback(
-    async (activeSession: MerchantSession, parsedAuthorization: ParsedAuthorization) => {
+    async (
+      activeSession: MerchantSession,
+      parsedAuthorization: ParsedAuthorization,
+      resolvedCustomerEnsName: string | null
+    ) => {
       if (isClaimingPaymentRef.current) {
         return;
       }
@@ -230,29 +317,41 @@ export default function MerchantScreen() {
           tokenSymbol: getTokenSymbolByAddress(activeSession.tokenAddress),
           chainName: CHAIN_NAME,
           txHash,
-          fromLabel: customerEnsName,
+          fromLabel: resolvedCustomerEnsName,
           toLabel: merchantEnsName,
         }).catch((error) => {
           console.warn("Failed to add merchant payment to recent activity:", error);
         });
 
-        setClaimTxHash(txHash);
-        setScreenState("success");
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
-        // Play loud success sound, wait for completion
-        await playPaymentSuccessSoundAsync();
-
-        // Then voice announcement
-        await announcePaymentReceivedAsync(
-          formatPaymentAmount(activeSession.amount),
-          getTokenSymbolByAddress(activeSession.tokenAddress)
-        );
-
+        // NFC cleanup - audio plays on success page
         await CardEmulation.setReady(false);
         await CardEmulation.setMerchantMode(false);
         await CardEmulation.clearPaymentRequest();
         await CardEmulation.clearPaymentAuthorization();
+
+        // Navigate to unified success page
+        router.replace({
+          pathname: "/payment-success",
+          params: buildSuccessRouteParams(
+            {
+              sessionId: activeSession.sessionId,
+              requestId: activeSession.requestId,
+              from: parsedAuthorization.customerAddress,
+              to: activeSession.merchantAddress,
+              amount: activeSession.amount,
+              tokenAddress: activeSession.tokenAddress,
+              chainId: activeSession.chainId,
+              createdAt: activeSession.createdAt,
+              txHash,
+              blockNumber: receipt.blockNumber,
+            },
+            "receiver",
+            {
+              fromLabel: resolvedCustomerEnsName,
+              toLabel: merchantEnsName,
+            }
+          ),
+        });
       } catch (err) {
         console.error("Failed to claim payment:", err);
         setErrorType("claim_failed");
@@ -261,7 +360,7 @@ export default function MerchantScreen() {
         isClaimingPaymentRef.current = false;
       }
     },
-    [addTransaction, customerEnsName, merchantEnsName, sendContractTransaction],
+    [addTransaction, merchantEnsName, sendContractTransaction],
   );
 
   // Listen for authorization from customer and claim automatically.
@@ -299,19 +398,22 @@ export default function MerchantScreen() {
         }
 
         setCustomerAddress(parsed.customerAddress);
-        getEnsClaimStatus(parsed.customerAddress)
-          .then((status) => {
-            setCustomerEnsName(status.fullName);
-          })
-          .catch((error) => {
-            console.warn("Failed to load customer ENS:", error);
-            setCustomerEnsName(null);
-          });
+
+        // Resolve ENS synchronously before claiming payment
+        let resolvedCustomerEnsName: string | null = null;
+        try {
+          const ensStatus = await getEnsClaimStatus(parsed.customerAddress);
+          resolvedCustomerEnsName = ensStatus.fullName;
+          setCustomerEnsName(ensStatus.fullName);
+        } catch (error) {
+          console.warn("Failed to load customer ENS:", error);
+          setCustomerEnsName(null);
+        }
 
         // "Safe to remove phones" - 2 beeps × 2 times
         await playNfcDoneSound();
         await CardEmulation.clearPaymentAuthorization();
-        await handleClaimPayment(session, parsed);
+        await handleClaimPayment(session, parsed, resolvedCustomerEnsName);
       } catch (err) {
         console.error("Failed to process authorization:", err);
         setErrorType("authorization_invalid");
@@ -365,7 +467,6 @@ export default function MerchantScreen() {
       await CardEmulation.startListening();
 
       setErrorType(undefined);
-      setClaimTxHash(null);
       setCustomerEnsName(null);
       setCustomerAddress(null);
       setSession(newSession);
@@ -417,7 +518,6 @@ export default function MerchantScreen() {
     setAmountInput("");
     setErrorType(undefined);
     setSession(null);
-    setClaimTxHash(null);
     setCustomerEnsName(null);
     setCustomerAddress(null);
   }, []);
@@ -430,22 +530,6 @@ export default function MerchantScreen() {
   }, [amountInput, session]);
 
   const backgroundColor = COLORS.green400;
-  const claimExplorerUrl = useMemo(() => {
-    if (!claimTxHash) {
-      return null;
-    }
-
-    return buildPaymentExplorerUrl(claimTxHash);
-  }, [claimTxHash]);
-
-  const handleOpenClaimExplorer = useCallback(async () => {
-    if (!claimExplorerUrl) {
-      return;
-    }
-
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    await Linking.openURL(claimExplorerUrl);
-  }, [claimExplorerUrl]);
 
   return (
     <View style={[styles.container, { backgroundColor }]}>
@@ -497,37 +581,37 @@ export default function MerchantScreen() {
               <View style={styles.statusContent}>
                 {screenState === "ready_to_receive" && (
                   <>
-                    <Text style={styles.statusText}>WAITING FOR CUSTOMER TAP</Text>
-                    <Text style={styles.helperText}>Hold the customer phone to this device</Text>
+                    <DotsPattern />
+                    <View style={styles.nfcCardContent}>
+                      <View style={styles.nfcCircle}>
+                        <NfcIcon size={48} color={COLORS.textInverted} />
+                      </View>
+                      <AnimatedWaveBars isAnimating={true} />
+                      <Text style={styles.statusText}>WAITING FOR CUSTOMER TAP</Text>
+                    </View>
                   </>
                 )}
                 {screenState === "claiming_payment" && (
-                  <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="large" color={COLORS.textPrimary} />
-                    <Text style={styles.statusText}>CLAIMING PAYMENT...</Text>
-                  </View>
-                )}
-                {screenState === "success" && (
-                  <View style={styles.successContainer}>
-                    <Text style={styles.successIcon}>✓</Text>
-                    <Text style={styles.statusText}>PAYMENT RECEIVED</Text>
-                    <Text style={styles.helperText}>
-                      {customerEnsName ?? shortAddress(customerAddress)} paid {merchantEnsName ?? "merchant"}
-                    </Text>
-                    {claimTxHash && (
-                      <Pressable onPress={handleOpenClaimExplorer}>
-                        <Text style={[styles.txHashText, styles.txHashLink]}>
-                          {claimTxHash.slice(0, 10)}...{claimTxHash.slice(-8)}
-                        </Text>
-                      </Pressable>
-                    )}
-                  </View>
+                  <>
+                    <DotsPattern />
+                    <View style={styles.nfcCardContent}>
+                      <View style={[styles.nfcCircle, styles.warningCircle]}>
+                        <ActivityIndicator size="large" color={COLORS.textInverted} />
+                      </View>
+                      <Text style={styles.statusText}>CLAIMING PAYMENT...</Text>
+                    </View>
+                  </>
                 )}
                 {screenState === "error" && (
-                  <View style={styles.errorContainer}>
-                    <Text style={styles.errorIcon}>✕</Text>
-                    <Text style={styles.errorText}>{getStatusLabel(screenState, errorType)}</Text>
-                  </View>
+                  <>
+                    <DotsPattern />
+                    <View style={styles.nfcCardContent}>
+                      <View style={[styles.nfcCircle, styles.errorCircle]}>
+                        <Text style={styles.nfcIconText}>✕</Text>
+                      </View>
+                      <Text style={styles.errorText}>{getStatusLabel(screenState, errorType)}</Text>
+                    </View>
+                  </>
                 )}
               </View>
             )}
@@ -541,18 +625,6 @@ export default function MerchantScreen() {
               <Text style={styles.infoLabel}>MERCHANT</Text>
               <Text style={styles.infoText}>{merchantEnsName ?? shortAddress(smartWalletAddress)}</Text>
               <Text style={styles.infoSubtext}>{shortAddress(smartWalletAddress)}</Text>
-            </View>
-          </View>
-        )}
-
-        {session?.merchantAddress && (screenState === "success" || screenState === "claiming_payment") && (
-          <View style={styles.infoBoxShadow}>
-            <View style={styles.infoBox}>
-              <Text style={styles.infoLabel}>CUSTOMER</Text>
-              <Text style={styles.infoText}>
-                {customerEnsName ?? (customerAddress ? shortAddress(customerAddress) : "Resolving payer...")}
-              </Text>
-              {customerAddress && <Text style={styles.infoSubtext}>{shortAddress(customerAddress)}</Text>}
             </View>
           </View>
         )}
@@ -586,21 +658,12 @@ export default function MerchantScreen() {
           </View>
         )}
 
-        {(screenState === "success" || screenState === "error") && (
-          <>
-            {claimExplorerUrl && screenState === "success" && (
-              <View style={styles.footerButtonShadow}>
-                <Pressable onPress={handleOpenClaimExplorer} style={styles.primaryButton}>
-                  <Text style={styles.primaryButtonText}>VIEW ON EXPLORER</Text>
-                </Pressable>
-              </View>
-            )}
-            <View style={styles.footerButtonShadow}>
-              <Pressable onPress={handleReset} style={styles.footerButton}>
-                <Text style={styles.footerButtonText}>NEW PAYMENT</Text>
-              </Pressable>
-            </View>
-          </>
+        {screenState === "error" && (
+          <View style={styles.footerButtonShadow}>
+            <Pressable onPress={handleReset} style={styles.footerButton}>
+              <Text style={styles.footerButtonText}>TRY AGAIN</Text>
+            </Pressable>
+          </View>
         )}
       </View>
     </View>
@@ -661,11 +724,8 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.surface,
     borderWidth: BORDER_THICK.width,
     borderColor: COLORS.border,
-    paddingVertical: 32,
-    paddingHorizontal: 24,
-    minHeight: 180,
-    alignItems: "center",
-    justifyContent: "center",
+    minHeight: 260,
+    overflow: "hidden",
     transform: [{ translateX: -SHADOW_OFFSET.width }, { translateY: -SHADOW_OFFSET.height }],
   },
   keypad: {
@@ -706,14 +766,47 @@ const styles = StyleSheet.create({
     transform: [{ translateX: 0 }, { translateY: 0 }],
   },
   statusContent: {
+    flex: 1,
+  },
+  dotsOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    opacity: 0.2,
+  },
+  nfcCardContent: {
+    flex: 1,
     alignItems: "center",
+    justifyContent: "center",
     gap: 16,
   },
-  helperText: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: COLORS.textMuted,
-    textAlign: "center",
+  nfcCircle: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: COLORS.primaryBlue,
+    borderWidth: BORDER_THICK.width,
+    borderColor: COLORS.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  warningCircle: {
+    backgroundColor: COLORS.warning,
+  },
+  errorCircle: {
+    backgroundColor: COLORS.error,
+  },
+  nfcIconText: {
+    fontSize: 36,
+    fontWeight: "900",
+    color: COLORS.textInverted,
+  },
+  waveBars: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  waveBar: {
+    width: 14,
+    backgroundColor: COLORS.border,
   },
   statusText: {
     fontSize: 18,
@@ -721,34 +814,6 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     textAlign: "center",
     letterSpacing: 1,
-  },
-  loadingContainer: {
-    alignItems: "center",
-    gap: 16,
-  },
-  successContainer: {
-    alignItems: "center",
-    gap: 12,
-  },
-  successIcon: {
-    fontSize: 48,
-    fontWeight: "900",
-    color: COLORS.success,
-  },
-  txHashText: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: COLORS.textMuted,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-  },
-  errorContainer: {
-    alignItems: "center",
-    gap: 12,
-  },
-  errorIcon: {
-    fontSize: 48,
-    fontWeight: "900",
-    color: COLORS.error,
   },
   errorText: {
     fontSize: 16,
@@ -827,20 +892,6 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     letterSpacing: 1,
   },
-  primaryButton: {
-    backgroundColor: COLORS.primaryBlue,
-    borderWidth: BORDER_THICK.width,
-    borderColor: COLORS.border,
-    paddingVertical: 14,
-    alignItems: "center",
-    transform: [{ translateX: -SHADOW_OFFSET.width }, { translateY: -SHADOW_OFFSET.height }],
-  },
-  primaryButtonText: {
-    fontSize: 16,
-    fontWeight: "900",
-    color: COLORS.textInverted,
-    letterSpacing: 1,
-  },
   warningButton: {
     backgroundColor: COLORS.warning,
     borderWidth: BORDER_THICK.width,
@@ -848,9 +899,5 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     alignItems: "center",
     transform: [{ translateX: -SHADOW_OFFSET.width }, { translateY: -SHADOW_OFFSET.height }],
-  },
-  txHashLink: {
-    color: COLORS.primaryBlue,
-    textDecorationLine: "underline",
   },
 });

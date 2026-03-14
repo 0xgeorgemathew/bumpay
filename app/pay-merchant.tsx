@@ -5,6 +5,8 @@ import {
   StyleSheet,
   Pressable,
   ActivityIndicator,
+  Animated,
+  Easing,
 } from "react-native";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
@@ -47,7 +49,6 @@ type PayMerchantState =
   | "signing"
   | "sending"
   | "watching_chain"
-  | "success"
   | "error";
 
 type PayMerchantError =
@@ -82,8 +83,6 @@ function getStatusLabel(state: PayMerchantState, error?: PayMerchantError): stri
       return "SENDING AUTHORIZATION";
     case "watching_chain":
       return "CONFIRMING PAYMENT";
-    case "success":
-      return "PAYMENT AUTHORIZED";
     case "error":
       return `ERROR: ${error?.toUpperCase().replace(/_/g, " ") ?? "UNKNOWN"}`;
   }
@@ -107,6 +106,87 @@ function buildMerchantTrackedIntent(
 
 function NfcIcon({ size = 48, color = "#fff" }: { size?: number; color?: string }) {
   return <MaterialCommunityIcons name="nfc" size={size} color={color} />;
+}
+
+// AnimatedWaveBars - 5 bars animating in wave pattern
+function AnimatedWaveBars({ isAnimating = true }: { isAnimating?: boolean }) {
+  const barHeights = [32, 48, 64, 48, 32];
+  const anims = useRef(barHeights.map(() => new Animated.Value(1))).current;
+
+  useEffect(() => {
+    if (!isAnimating) {
+      anims.forEach((anim) => anim.setValue(1));
+      return;
+    }
+
+    const animations = anims.map((anim, index) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(index * 150),
+          Animated.timing(anim, {
+            toValue: 1.5,
+            duration: 600,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+          Animated.timing(anim, {
+            toValue: 0.5,
+            duration: 600,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+          Animated.timing(anim, {
+            toValue: 1,
+            duration: 600,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+        ]),
+      ),
+    );
+
+    animations.forEach((animation) => animation.start());
+    return () => animations.forEach((animation) => animation.stop());
+  }, [anims, isAnimating]);
+
+  return (
+    <View style={styles.waveBars}>
+      {barHeights.map((height, index) => (
+        <Animated.View
+          key={index}
+          style={[styles.waveBar, { height, transform: [{ scaleY: anims[index] }] }]}
+        />
+      ))}
+    </View>
+  );
+}
+
+// DotsPattern - Decorative dot overlay
+function DotsPattern() {
+  const dotSize = 4;
+  const gap = 16;
+  const dots = [];
+
+  for (let row = 0; row < 20; row += 1) {
+    for (let column = 0; column < 20; column += 1) {
+      dots.push(
+        <View
+          key={`${row}-${column}`}
+          style={{
+            position: "absolute",
+            left: column * gap + gap / 2 - dotSize / 2,
+            top: row * gap + gap / 2 - dotSize / 2,
+            width: dotSize,
+            height: dotSize,
+            borderRadius: dotSize / 2,
+            backgroundColor: COLORS.border,
+          }}
+        />,
+      );
+    }
+  }
+
+  return <View style={styles.dotsOverlay}>{dots}</View>;
 }
 
 function shortAddress(address?: string | null): string {
@@ -498,87 +578,120 @@ export default function PayMerchantScreen() {
         <View style={styles.statusCardShadow}>
           <View style={styles.statusCard}>
             {screenState === "scanning" && (
-              <View style={styles.nfcContent}>
-                <View style={styles.nfcCircle}>
-                  <NfcIcon size={48} color={COLORS.textInverted} />
+              <>
+                <DotsPattern />
+                <View style={styles.nfcCardContent}>
+                  <View style={styles.nfcCircle}>
+                    <NfcIcon size={48} color={COLORS.textInverted} />
+                  </View>
+                  <AnimatedWaveBars isAnimating={true} />
+                  <Text style={styles.statusText}>TAP TO MERCHANT DEVICE</Text>
                 </View>
-                <Text style={styles.statusText}>TAP TO MERCHANT DEVICE</Text>
-                <Text style={styles.helperText}>Waiting for payment request...</Text>
-              </View>
+              </>
             )}
 
             {screenState === "request_received" && merchantRequest && (
-              <View style={styles.requestContent}>
-                <Text style={styles.merchantLabel}>MERCHANT</Text>
-                <Text style={styles.merchantText}>{merchantDisplay}</Text>
-                <Text style={styles.largeAmount}>
-                  {formatUnits(merchantRequest.amount, TOKEN_DECIMALS)} {tokenSymbol}
-                </Text>
-                <Text style={styles.helperText}>Authorizing payment automatically...</Text>
-              </View>
+              <>
+                <DotsPattern />
+                <View style={styles.nfcCardContent}>
+                  <View style={[styles.nfcCircle, styles.warningCircle]}>
+                    <ActivityIndicator size="large" color={COLORS.textInverted} />
+                  </View>
+                  <Text style={styles.merchantLabel}>MERCHANT</Text>
+                  <Text style={styles.merchantText}>{merchantDisplay}</Text>
+                  <Text style={styles.largeAmount}>
+                    {formatUnits(merchantRequest.amount, TOKEN_DECIMALS)} {tokenSymbol}
+                  </Text>
+                </View>
+              </>
             )}
 
             {(screenState === "checking_allowance" || screenState === "approving") && (
-              <View style={styles.loadingContent}>
-                <ActivityIndicator size="large" color={COLORS.textPrimary} />
-                <Text style={styles.statusText}>
-                  {screenState === "approving" ? "APPROVING TOKEN..." : "CHECKING ALLOWANCE..."}
-                </Text>
-              </View>
+              <>
+                <DotsPattern />
+                <View style={styles.nfcCardContent}>
+                  <View style={[styles.nfcCircle, styles.warningCircle]}>
+                    <ActivityIndicator size="large" color={COLORS.textInverted} />
+                  </View>
+                  <Text style={styles.statusText}>
+                    {screenState === "approving" ? "APPROVING TOKEN..." : "CHECKING ALLOWANCE..."}
+                  </Text>
+                </View>
+              </>
             )}
 
             {screenState === "signing" && (
-              <View style={styles.loadingContent}>
-                <ActivityIndicator size="large" color={COLORS.textPrimary} />
-                <Text style={styles.statusText}>SIGNING AUTHORIZATION...</Text>
-              </View>
+              <>
+                <DotsPattern />
+                <View style={styles.nfcCardContent}>
+                  <View style={[styles.nfcCircle, styles.warningCircle]}>
+                    <ActivityIndicator size="large" color={COLORS.textInverted} />
+                  </View>
+                  <Text style={styles.statusText}>SIGNING AUTHORIZATION...</Text>
+                </View>
+              </>
             )}
 
             {screenState === "sending" && (
-              <View style={styles.loadingContent}>
-                <ActivityIndicator size="large" color={COLORS.textPrimary} />
-                <Text style={styles.statusText}>SENDING AUTHORIZATION...</Text>
-              </View>
+              <>
+                <DotsPattern />
+                <View style={styles.nfcCardContent}>
+                  <View style={[styles.nfcCircle, styles.warningCircle]}>
+                    <ActivityIndicator size="large" color={COLORS.textInverted} />
+                  </View>
+                  <Text style={styles.statusText}>SENDING AUTHORIZATION...</Text>
+                </View>
+              </>
             )}
 
             {screenState === "watching_chain" && (
-              <View style={styles.loadingContent}>
-                <ActivityIndicator size="large" color={COLORS.textPrimary} />
-                <Text style={styles.statusText}>CONFIRMING PAYMENT...</Text>
-                <Text style={styles.helperText}>
-                  Waiting for {merchantDisplay ?? "merchant"} to claim the payment
-                </Text>
-              </View>
-            )}
-
-            {screenState === "success" && (
-              <View style={styles.successContainer}>
-                <Text style={styles.successIcon}>✓</Text>
-                <Text style={styles.statusText}>PAYMENT AUTHORIZED</Text>
-                <Text style={styles.helperText}>
-                  Authorization sent to {merchantDisplay ?? "merchant"}
-                </Text>
-              </View>
+              <>
+                <DotsPattern />
+                <View style={styles.nfcCardContent}>
+                  <View style={[styles.nfcCircle, styles.warningCircle]}>
+                    <ActivityIndicator size="large" color={COLORS.textInverted} />
+                  </View>
+                  <Text style={styles.statusText}>CONFIRMING PAYMENT...</Text>
+                  <Text style={styles.routeText}>
+                    {payerEnsName ?? "You"} → {merchantDisplay ?? "merchant"}
+                  </Text>
+                </View>
+              </>
             )}
 
             {screenState === "error" && (
-              <View style={styles.errorContent}>
-                <Text style={styles.errorIcon}>✕</Text>
-                <Text style={styles.errorText}>{getStatusLabel(screenState, errorType)}</Text>
-              </View>
+              <>
+                <DotsPattern />
+                <View style={styles.nfcCardContent}>
+                  <View style={[styles.nfcCircle, styles.errorCircle]}>
+                    <Text style={styles.nfcIconText}>✕</Text>
+                  </View>
+                  <Text style={styles.errorText}>{getStatusLabel(screenState, errorType)}</Text>
+                </View>
+              </>
             )}
 
             {(screenState === "idle" || !walletReady) && (
-              <View style={styles.nfcContent}>
-                <Text style={styles.statusText}>
-                  {!walletReady
-                    ? walletStatus === "error"
-                      ? "WALLET SETUP FAILED"
-                      : "WAITING FOR WALLET"
-                    : "INITIALIZING..."}
-                </Text>
-                {walletError && <Text style={styles.errorText}>{walletError}</Text>}
-              </View>
+              <>
+                <DotsPattern />
+                <View style={styles.nfcCardContent}>
+                  <View style={[styles.nfcCircle, walletStatus === "error" ? styles.errorCircle : null]}>
+                    {walletStatus === "error" ? (
+                      <Text style={styles.nfcIconText}>✕</Text>
+                    ) : (
+                      <ActivityIndicator size="large" color={COLORS.textInverted} />
+                    )}
+                  </View>
+                  <Text style={styles.statusText}>
+                    {!walletReady
+                      ? walletStatus === "error"
+                        ? "WALLET SETUP FAILED"
+                        : "WAITING FOR WALLET"
+                      : "INITIALIZING..."}
+                  </Text>
+                  {walletError && <Text style={styles.errorText}>{walletError}</Text>}
+                </View>
+              </>
             )}
           </View>
         </View>
@@ -623,12 +736,10 @@ export default function PayMerchantScreen() {
           </View>
         )}
 
-        {(screenState === "success" || screenState === "error") && (
+        {screenState === "error" && (
           <View style={styles.footerButtonShadow}>
             <Pressable onPress={handleReset} style={styles.footerButton}>
-              <Text style={styles.footerButtonText}>
-                {screenState === "error" ? "TRY AGAIN" : "DONE"}
-              </Text>
+              <Text style={styles.footerButtonText}>TRY AGAIN</Text>
             </Pressable>
           </View>
         )}
@@ -691,16 +802,46 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.surface,
     borderWidth: BORDER_THICK.width,
     borderColor: COLORS.border,
-    paddingVertical: 32,
-    paddingHorizontal: 24,
-    minHeight: 180,
-    alignItems: "center",
-    justifyContent: "center",
+    minHeight: 260,
+    overflow: "hidden",
     transform: [{ translateX: -SHADOW_OFFSET.width }, { translateY: -SHADOW_OFFSET.height }],
   },
-  nfcContent: {
+  dotsOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    opacity: 0.2,
+  },
+  nfcCardContent: {
+    flex: 1,
     alignItems: "center",
+    justifyContent: "center",
     gap: 16,
+  },
+  warningCircle: {
+    backgroundColor: COLORS.warning,
+  },
+  errorCircle: {
+    backgroundColor: COLORS.error,
+  },
+  nfcIconText: {
+    fontSize: 36,
+    fontWeight: "900",
+    color: COLORS.textInverted,
+  },
+  waveBars: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  waveBar: {
+    width: 14,
+    backgroundColor: COLORS.border,
+  },
+  routeText: {
+    fontSize: 14,
+    fontWeight: "900",
+    color: COLORS.textPrimary,
+    textAlign: "center",
+    paddingHorizontal: 24,
   },
   nfcCircle: {
     width: 96,
@@ -711,10 +852,6 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     alignItems: "center",
     justifyContent: "center",
-  },
-  requestContent: {
-    alignItems: "center",
-    gap: 8,
   },
   merchantLabel: {
     fontSize: 10,
@@ -732,34 +869,6 @@ const styles = StyleSheet.create({
     fontSize: 32,
     fontWeight: "900",
     color: COLORS.textPrimary,
-  },
-  loadingContent: {
-    alignItems: "center",
-    gap: 16,
-  },
-  successContainer: {
-    alignItems: "center",
-    gap: 12,
-  },
-  successIcon: {
-    fontSize: 48,
-    fontWeight: "900",
-    color: COLORS.success,
-  },
-  helperText: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: COLORS.textMuted,
-    textAlign: "center",
-  },
-  errorContent: {
-    alignItems: "center",
-    gap: 12,
-  },
-  errorIcon: {
-    fontSize: 48,
-    fontWeight: "900",
-    color: COLORS.error,
   },
   errorText: {
     fontSize: 16,
