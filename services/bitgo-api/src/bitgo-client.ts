@@ -30,10 +30,31 @@ type BitGoWalletLike = {
   createAddress?: (params?: Record<string, unknown>) => Promise<unknown>;
   listWebhooks?: () => Promise<unknown>;
   addWebhook?: (params: { url: string; type: string }) => Promise<unknown>;
+  sendMany?: (params: Record<string, unknown>) => Promise<unknown>;
+};
+
+type MerchantSummary = {
+  merchantId: string;
+  merchantAddress: Address;
+  walletId?: string;
+  walletAddress?: Address;
+  tokenSymbol: string;
+  tokenAddress: Address;
+  totalReceived: string;
+  unclaimedAmount: string;
+  claimedAmount: string;
+  pendingAmount: string;
+  checkoutCount: number;
+  settledCheckoutCount: number;
+  unclaimedCheckoutCount: number;
 };
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function sumAmounts(values: string[]) {
+  return values.reduce((total, value) => total + BigInt(value), BigInt(0)).toString();
 }
 
 function readWalletId(payload: unknown): string | undefined {
@@ -362,6 +383,35 @@ export class BitGoMerchantService {
     return checkout;
   }
 
+  async getMerchantSummary(merchantAddress: Address): Promise<MerchantSummary> {
+    const merchantId = this.buildMerchantId(merchantAddress);
+    const snapshot = await this.store.read();
+    const merchant = snapshot.merchants[merchantId];
+    const checkouts = Object.values(snapshot.checkouts).filter(
+      (checkout) => checkout.merchantId === merchantId,
+    );
+
+    const settled = checkouts.filter((checkout) => checkout.status === "settled");
+    const unclaimed = settled.filter((checkout) => !checkout.claimedAt);
+    const claimed = settled.filter((checkout) => Boolean(checkout.claimedAt));
+
+    return {
+      merchantId,
+      merchantAddress,
+      walletId: merchant?.bitgoWalletId,
+      walletAddress: merchant?.bitgoBaseAddress,
+      tokenSymbol: this.config.MERCHANT_ASSET_SYMBOL,
+      tokenAddress: this.config.MERCHANT_TOKEN_ADDRESS as Address,
+      totalReceived: sumAmounts(settled.map((checkout) => checkout.amount)),
+      unclaimedAmount: sumAmounts(unclaimed.map((checkout) => checkout.amount)),
+      claimedAmount: sumAmounts(claimed.map((checkout) => checkout.amount)),
+      pendingAmount: "0",
+      checkoutCount: checkouts.length,
+      settledCheckoutCount: settled.length,
+      unclaimedCheckoutCount: unclaimed.length,
+    };
+  }
+
   private isExpired(checkout: CheckoutRecord) {
     return (
       !["settled", "failed", "expired"].includes(checkout.status) &&
@@ -581,10 +631,25 @@ export class BitGoMerchantService {
       throw new Error("Merchant BitGo wallet not found");
     }
 
+    const eligibleCheckouts = Object.values(snapshot.checkouts)
+      .filter(
+        (checkout) =>
+          checkout.merchantId === merchant.merchantId &&
+          checkout.status === "settled" &&
+          !checkout.claimedAt,
+      )
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+
+    const selectedCheckouts = eligibleCheckouts.filter((checkout) => checkout.amount === params.amount);
+    const checkoutsToClaim = selectedCheckouts.length > 0 ? [selectedCheckouts[0]] : eligibleCheckouts;
+    const selectedAmount = sumAmounts(checkoutsToClaim.map((checkout) => checkout.amount));
+
+    if (selectedAmount !== params.amount) {
+      throw new Error("Withdrawal amount must match the available unclaimed checkout total");
+    }
+
     const wallet = await this.getWallet(merchant.bitgoWalletId);
-    const sendMany = (wallet as BitGoWalletLike & {
-      sendMany?: (params: Record<string, unknown>) => Promise<unknown>;
-    }).sendMany;
+    const sendMany = wallet.sendMany;
 
     if (!sendMany) {
       throw new Error("BitGo wallet does not support sendMany");
@@ -601,6 +666,26 @@ export class BitGoMerchantService {
       type: "transfer",
       isTss: true,
       tokenName: this.config.BITGO_MERCHANT_TOKEN_NAME,
+    });
+
+    const resultRecord = result as {
+      txid?: string;
+      transfer?: { id?: string };
+      pendingApproval?: { id?: string };
+    };
+
+    await this.store.transact((data) => {
+      for (const checkout of checkoutsToClaim) {
+        const current = data.checkouts[checkout.checkoutId];
+        if (!current) {
+          continue;
+        }
+
+        current.claimedAt = nowIso();
+        current.claimTxId = resultRecord.txid;
+        current.claimTransferId = resultRecord.transfer?.id ?? resultRecord.pendingApproval?.id;
+        current.updatedAt = nowIso();
+      }
     });
 
     return result;

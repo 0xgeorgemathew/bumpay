@@ -13,7 +13,7 @@ import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { usePrivy } from "@privy-io/expo";
 import { formatUnits, parseUnits } from "viem";
-import { COLORS, BORDER_THICK, SHADOW } from "../constants/theme";
+import { COLORS, BORDER_THICK } from "../constants/theme";
 import { useOperationalWallet } from "../lib/wallet";
 import { CardEmulation } from "../lib/nfc/card-emulation";
 import { playNfcCompleteSound } from "../lib/audio/feedback";
@@ -24,11 +24,7 @@ import {
   type MerchantBitGoCheckoutStatus,
 } from "../lib/bitgo";
 import { buildMerchantBitGoPaymentRequestMessage } from "../lib/payments/merchant-bitgo-session";
-import {
-  BITGO_MERCHANT_TOKEN,
-  CHAIN_ID,
-  TOKEN_DECIMALS,
-} from "../lib/blockchain/contracts";
+import { BITGO_MERCHANT_TOKEN, CHAIN_ID, TOKEN_DECIMALS } from "../lib/blockchain/contracts";
 
 type ScreenState =
   | "enter_amount"
@@ -38,6 +34,9 @@ type ScreenState =
   | "deposit_detected"
   | "success"
   | "error";
+
+const SHADOW_OFFSET = { width: 8, height: 8 };
+const CHECKOUT_POLL_INTERVAL_MS = 4000;
 
 function parsePaymentAmount(value: string): bigint | null {
   const cleaned = value.replace(/[^0-9.]/g, "");
@@ -95,9 +94,6 @@ function mapCheckoutStatus(status: MerchantBitGoCheckoutStatus): ScreenState {
   }
 }
 
-const SHADOW_OFFSET = { width: 8, height: 8 };
-const CHECKOUT_POLL_INTERVAL_MS = 4000;
-
 async function resetMerchantBroadcast() {
   await CardEmulation.setReady(false).catch(() => undefined);
   await CardEmulation.setMerchantMode(false).catch(() => undefined);
@@ -109,6 +105,7 @@ export default function MerchantBitGoScreen() {
   const router = useRouter();
   const { user, isReady: privyReady } = usePrivy();
   const { smartWalletAddress, isReady: walletReady } = useOperationalWallet();
+
   const [amountInput, setAmountInput] = useState("");
   const [screenState, setScreenState] = useState<ScreenState>("enter_amount");
   const [checkout, setCheckout] = useState<MerchantBitGoCheckout | null>(null);
@@ -253,7 +250,7 @@ export default function MerchantBitGoScreen() {
       <View style={styles.mainContent}>
         <View style={styles.amountBoxShadow}>
           <View style={styles.amountBox}>
-            <Text style={styles.amountLabel}>MERCHANT BITGO ({BITGO_MERCHANT_TOKEN.symbol})</Text>
+            <Text style={styles.amountLabel}>NEW CHECKOUT ({BITGO_MERCHANT_TOKEN.symbol})</Text>
             <Text style={styles.amountText}>{displayAmount}</Text>
             <Text style={styles.tokenHint}>Fresh BitGo address per checkout</Text>
           </View>
@@ -332,8 +329,13 @@ export default function MerchantBitGoScreen() {
         ) : null}
 
         <View style={styles.buttonShadow}>
-          <Pressable onPress={screenState === "success" ? handleReset : handleCancel} style={styles.secondaryButton}>
-            <Text style={styles.secondaryButtonText}>{screenState === "success" ? "NEW CHECKOUT" : "BACK"}</Text>
+          <Pressable
+            onPress={screenState === "success" ? handleReset : handleCancel}
+            style={styles.secondaryButton}
+          >
+            <Text style={styles.secondaryButtonText}>
+              {screenState === "success" ? "NEW CHECKOUT" : "BACK"}
+            </Text>
           </Pressable>
         </View>
       </View>

@@ -31,6 +31,24 @@ const withdrawSchema = z.object({
 export function createMerchantRouter(service: BitGoMerchantService) {
   const router = Router();
 
+  router.get("/summary", async (req, res) => {
+    try {
+      const merchantAddress = addressSchema.parse(req.query.merchantAddress);
+      const summary = await service.getMerchantSummary(merchantAddress as `0x${string}`);
+
+      res.json({
+        success: true,
+        data: summary,
+        message: "Merchant summary loaded",
+      });
+    } catch (error) {
+      res.status(400).json({
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to load merchant summary",
+      });
+    }
+  });
+
   router.post("/checkouts", async (req, res) => {
     try {
       const parsed = createCheckoutSchema.parse(req.body);

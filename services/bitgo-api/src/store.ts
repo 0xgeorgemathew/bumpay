@@ -45,6 +45,9 @@ export interface CheckoutRecord {
   customerTxHash?: Hex;
   bitgoTransferId?: string;
   bitgoTxHash?: Hex;
+  claimedAt?: string;
+  claimTransferId?: string;
+  claimTxId?: string;
   bitgoWebhookEventIds: string[];
   rawWebhookEvents: Array<Record<string, unknown>>;
   errorMessage?: string;

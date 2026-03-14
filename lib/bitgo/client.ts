@@ -49,6 +49,22 @@ export interface MerchantBitGoWithdrawalResult {
   };
 }
 
+export interface MerchantBitGoSummary {
+  merchantId: string;
+  merchantAddress: Address;
+  walletId?: string;
+  walletAddress?: Address;
+  tokenSymbol: string;
+  tokenAddress: Address;
+  totalReceived: string;
+  unclaimedAmount: string;
+  claimedAmount: string;
+  pendingAmount: string;
+  checkoutCount: number;
+  settledCheckoutCount: number;
+  unclaimedCheckoutCount: number;
+}
+
 interface ApiEnvelope<T> {
   success: boolean;
   data: T;
@@ -100,6 +116,13 @@ export async function createMerchantBitGoCheckout(params: {
     },
     body: JSON.stringify(params),
   });
+}
+
+export async function getMerchantBitGoSummary(
+  merchantAddress: Address,
+): Promise<MerchantBitGoSummary> {
+  const search = new URLSearchParams({ merchantAddress });
+  return request<MerchantBitGoSummary>(`/api/bitgo/merchant/summary?${search.toString()}`);
 }
 
 export async function getMerchantBitGoCheckout(
