@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from "react";
-import { Pressable, StyleSheet, Text, View, ActivityIndicator } from "react-native";
+import { Pressable, StyleSheet, Text, View, ActivityIndicator, Linking } from "react-native";
+import type { Hex } from "viem";
 import { NeoButton, NeoInput } from "./index";
 import { NeoSelect } from "./NeoSelect";
 import { COLORS, BORDER_THICK, SHADOW } from "../constants/theme";
@@ -28,6 +29,7 @@ import {
 } from "../lib/ens/service";
 import { useOperationalWallet } from "../lib/wallet";
 import { P2P_TOKEN_OPTIONS } from "../lib/blockchain/select-options";
+import { buildPaymentExplorerUrl } from "../lib/payments/payment-tracking-types";
 import * as Haptics from "expo-haptics";
 
 type ClaimFlowStatus =
@@ -47,6 +49,11 @@ interface EnsPreferencesCardProps {
   readOnly?: boolean;
   title?: string;
   defaultExpanded?: boolean;
+}
+
+interface EnsTransactionItem {
+  hashes: Hex[];
+  label: string;
 }
 
 export function EnsPreferencesCard({
@@ -71,6 +78,7 @@ export function EnsPreferencesCard({
   const [usernameInput, setUsernameInput] = useState("");
   const [claimError, setClaimError] = useState<string | null>(null);
   const [onchainSyncStatus, setOnchainSyncStatus] = useState<OnchainSyncStatus>("idle");
+  const [ensTransactions, setEnsTransactions] = useState<EnsTransactionItem[]>([]);
 
   // Create wallet client wrapper for ENS writes
   const walletClient: WalletWriteClient | null = useMemo(() => {
@@ -204,6 +212,45 @@ export function EnsPreferencesCard({
     };
   }, []);
 
+  const addEnsTransactions = useCallback((transactions: EnsTransactionItem[]) => {
+    if (transactions.length === 0) {
+      return;
+    }
+
+    setEnsTransactions((current) => {
+      const seen = new Set(current.flatMap((transaction) => transaction.hashes.map((hash) => hash.toLowerCase())));
+      const next = [...current];
+
+      for (const transaction of transactions) {
+        const uniqueHashes = transaction.hashes.filter((hash, index, hashes) => (
+          hashes.findIndex((candidate) => candidate.toLowerCase() === hash.toLowerCase()) === index
+        ));
+
+        const unseenHashes = uniqueHashes.filter((hash) => !seen.has(hash.toLowerCase()));
+        if (unseenHashes.length > 0) {
+          unseenHashes.forEach((hash) => seen.add(hash.toLowerCase()));
+          next.unshift({
+            label: transaction.label,
+            hashes: unseenHashes,
+          });
+        }
+      }
+
+      return next;
+    });
+  }, []);
+
+  const handleOpenExplorer = useCallback(async (txHash: Hex) => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+
+    try {
+      await Linking.openURL(buildPaymentExplorerUrl(txHash));
+    } catch (error) {
+      setClaimError(error instanceof Error ? error.message : "Failed to open explorer");
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
+  }, []);
+
   // Check username availability
   const handleCheckAvailability = useCallback(async () => {
     const label = normalizeEnsLabel(usernameInput);
@@ -248,7 +295,8 @@ export function EnsPreferencesCard({
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
 
     try {
-      await claimSubdomain(walletClient, label, smartWalletAddress);
+      const claimTxHash = await claimSubdomain(walletClient, label, smartWalletAddress);
+      addEnsTransactions([{ hashes: [claimTxHash], label: `CLAIM ${formatFullEnsName(label)}` }]);
 
       const fullName = formatFullEnsName(label);
       const claimedStatus = await waitForClaimStatus(fullName);
@@ -268,7 +316,15 @@ export function EnsPreferencesCard({
       setClaimError(error instanceof Error ? error.message : "Failed to claim username");
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
-  }, [smartWalletAddress, usernameInput, setDraft, waitForClaimStatus, walletBlockedMessage, walletClient]);
+  }, [
+    addEnsTransactions,
+    smartWalletAddress,
+    usernameInput,
+    setDraft,
+    waitForClaimStatus,
+    walletBlockedMessage,
+    walletClient,
+  ]);
 
   // Save preferences to onchain
   const handleSaveToOnchain = useCallback(async () => {
@@ -284,6 +340,7 @@ export function EnsPreferencesCard({
     }
 
     setOnchainSyncStatus("saving");
+    setClaimError(null);
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
 
     try {
@@ -303,7 +360,10 @@ export function EnsPreferencesCard({
         );
       }
 
-      await writeEnsProfile(walletClient, node, draft);
+      const txHashes = await writeEnsProfile(walletClient, node, draft);
+      addEnsTransactions(
+        [{ hashes: txHashes, label: "SAVE PREFERENCES" }],
+      );
       const syncedProfile = await waitForProfileSync(label);
       if (!syncedProfile) {
         throw new Error("Profile transactions were submitted but the ENS records were not confirmed onchain");
@@ -319,7 +379,14 @@ export function EnsPreferencesCard({
       setClaimError(error instanceof Error ? error.message : "Failed to save to onchain");
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
-  }, [draft, smartWalletAddress, waitForProfileSync, walletBlockedMessage, walletClient]);
+  }, [
+    addEnsTransactions,
+    draft,
+    smartWalletAddress,
+    waitForProfileSync,
+    walletBlockedMessage,
+    walletClient,
+  ]);
 
   const showSavedIndicator = useCallback(() => {
     if (savedTimeoutRef.current) {
@@ -542,6 +609,30 @@ export function EnsPreferencesCard({
                 </View>
               </>
             )}
+
+            {ensTransactions.length > 0 ? (
+              <View style={styles.transactionSection}>
+                <Text style={styles.sectionLabel}>ENS TRANSACTIONS</Text>
+                {ensTransactions.map((transaction) => (
+                  <View key={`${transaction.label}-${transaction.hashes[0]}`} style={styles.transactionRow}>
+                    <View style={styles.transactionMeta}>
+                      <Text style={styles.transactionLabel}>{transaction.label}</Text>
+                      <Text style={styles.transactionHash}>
+                        {transaction.hashes.length > 1
+                          ? `${transaction.hashes.length} TXS SUBMITTED`
+                          : `${transaction.hashes[0].slice(0, 10)}...${transaction.hashes[0].slice(-8)}`}
+                      </Text>
+                    </View>
+                    <Pressable
+                      onPress={() => handleOpenExplorer(transaction.hashes[transaction.hashes.length - 1])}
+                      style={styles.transactionButton}
+                    >
+                      <Text style={styles.transactionButtonText}>OPEN IN EXPLORER</Text>
+                    </Pressable>
+                  </View>
+                ))}
+              </View>
+            ) : null}
           </View>
         )}
       </View>
@@ -712,6 +803,44 @@ const styles = StyleSheet.create({
   },
   saveRow: {
     marginTop: 8,
+  },
+  transactionSection: {
+    marginTop: 16,
+  },
+  transactionRow: {
+    borderWidth: BORDER_THICK.width,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.backgroundLight,
+    padding: 12,
+    marginTop: 10,
+    gap: 12,
+  },
+  transactionMeta: {
+    gap: 4,
+  },
+  transactionLabel: {
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 1,
+    color: COLORS.textPrimary,
+  },
+  transactionHash: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: COLORS.textMuted,
+  },
+  transactionButton: {
+    borderWidth: BORDER_THICK.width,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.green400,
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  transactionButtonText: {
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 1,
+    color: COLORS.textPrimary,
   },
   previewHeading: {
     fontSize: 11,
