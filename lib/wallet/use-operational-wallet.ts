@@ -14,7 +14,15 @@ import {
   type LinkedAccount,
 } from "@privy-io/expo";
 import { useSmartWallets } from "@privy-io/expo/smart-wallets";
-import { createPublicClient, encodeFunctionData, http, type Address, type Hex } from "viem";
+import {
+  createPublicClient,
+  encodeFunctionData,
+  http,
+  type Address,
+  type Hex,
+  type TypedDataDomain,
+} from "viem";
+import type { TypedData } from "abitype";
 import { baseSepolia } from "viem/chains";
 import { TOKEN_ABI, TOKEN_ADDRESS, USDT_ADDRESS, CHAIN_ID } from "../blockchain/contracts";
 import { DEFAULT_MINT_AMOUNT, FAUCET_ADDRESS, FAUCET_ABI } from "../blockchain/token-mint";
@@ -55,6 +63,20 @@ export interface UseOperationalWalletResult {
   sendTokenTransfer: (tokenAddress: Address, recipient: Address, amount: bigint) => Promise<Hex | null>;
   sendTokens: (recipient: Address, amount: bigint) => Promise<Hex | null>;
   sendContractTransaction: (to: Address, data: Hex, value?: bigint) => Promise<Hex | null>;
+  // EIP-712 signing for merchant mode
+  signTypedData: (
+    params: {
+      domain: TypedDataDomain;
+      types: TypedData;
+      primaryType: string;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      message: any;
+    },
+  ) => Promise<Hex>;
+  // Allowance helpers
+  checkAllowance: (tokenAddress: Address, owner: Address, spender: Address) => Promise<bigint>;
+  setAllowance: (tokenAddress: Address, spender: Address, amount: bigint) => Promise<Hex | null>;
+  ensureAllowance: (tokenAddress: Address, spender: Address, amount: bigint) => Promise<Hex | null>;
 }
 
 type EmbeddedWalletAccount = Extract<LinkedAccount, { type: "wallet" }>;
@@ -438,6 +460,119 @@ function useOperationalWalletValue(): UseOperationalWalletResult {
     [sendTokenTransfer],
   );
 
+  /**
+   * Sign EIP-712 typed data using the smart wallet
+   * Used for signing payment authorizations in merchant mode
+   */
+  const signTypedData = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async (params: {
+      domain: TypedDataDomain;
+      types: TypedData;
+      primaryType: string;
+      message: any;
+    }): Promise<Hex> => {
+      if (!isReady) {
+        const message =
+          getProvisioningMessage(provisioningStatus) ?? "Smart wallet is not ready";
+        setTransactionError(message);
+        throw new Error(message);
+      }
+
+      const client = await getSmartWalletClient();
+
+      setIsLoading(true);
+      setTransactionError(null);
+
+      try {
+        // Use the smart wallet client's signTypedData method
+        const signature = await client.signTypedData({
+          domain: params.domain,
+          types: params.types,
+          primaryType: params.primaryType as string,
+          message: params.message,
+        });
+
+        return signature as Hex;
+      } catch (signError) {
+        const message =
+          signError instanceof Error
+            ? signError.message
+            : "Failed to sign typed data";
+        setTransactionError(message);
+        throw new Error(message);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [getSmartWalletClient, isReady, provisioningStatus],
+  );
+
+  /**
+   * Check token allowance for a spender
+   */
+  const checkAllowance = useCallback(
+    async (tokenAddress: Address, owner: Address, spender: Address): Promise<bigint> => {
+      try {
+        const allowance = await publicClient.readContract({
+          address: tokenAddress,
+          abi: TOKEN_ABI,
+          functionName: "allowance",
+          args: [owner, spender],
+        });
+        return allowance as bigint;
+      } catch (readError) {
+        const message =
+          readError instanceof Error ? readError.message : "Failed to check allowance";
+        setTransactionError(message);
+        throw new Error(message);
+      }
+    },
+    [],
+  );
+
+  /**
+   * Ensure sufficient allowance, approve if needed
+   * Returns transaction hash if approval was needed, null if already approved
+   */
+  const ensureAllowance = useCallback(
+    async (tokenAddress: Address, spender: Address, amount: bigint): Promise<Hex | null> => {
+      if (!smartWalletAddress) {
+        setTransactionError("No smart wallet address");
+        throw new Error("No smart wallet address");
+      }
+
+      const currentAllowance = await checkAllowance(tokenAddress, smartWalletAddress, spender);
+
+      if (currentAllowance >= amount) {
+        return null; // Already approved
+      }
+
+      // Approve the exact amount needed
+      const data = encodeFunctionData({
+        abi: TOKEN_ABI,
+        functionName: "approve",
+        args: [spender, amount],
+      });
+
+      return sendContractTransaction(tokenAddress, data);
+    },
+    [checkAllowance, sendContractTransaction, smartWalletAddress],
+  );
+
+  const setAllowance = useCallback(
+    async (tokenAddress: Address, spender: Address, amount: bigint): Promise<Hex | null> => {
+      const data = encodeFunctionData({
+        abi: TOKEN_ABI,
+        functionName: "approve",
+        args: [spender, amount],
+      });
+
+      return sendContractTransaction(tokenAddress, data);
+    },
+    [sendContractTransaction],
+  );
+
   return {
     rootSignerAddress,
     embeddedWalletAddress,
@@ -454,6 +589,10 @@ function useOperationalWalletValue(): UseOperationalWalletResult {
     sendTokenTransfer,
     sendTokens,
     sendContractTransaction,
+    signTypedData,
+    checkAllowance,
+    setAllowance,
+    ensureAllowance,
   };
 }
 

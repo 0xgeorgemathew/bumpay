@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { usePrivy } from "@privy-io/expo";
+import { TOKEN_ADDRESS, VERIFIER_ADDRESS } from "./blockchain/contracts";
 import { useOperationalWallet } from "./wallet/use-operational-wallet";
 
 interface TokenBalances {
@@ -92,15 +93,17 @@ export function BalanceProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
 
   const refreshBalancesRef = useRef(wallet.refreshBalances);
+  const checkAllowanceRef = useRef(wallet.checkAllowance);
   const smartWalletAddressRef = useRef(wallet.smartWalletAddress);
   const walletReadyRef = useRef(wallet.isReady);
   const inFlightFetchRef = useRef<Promise<boolean> | null>(null);
 
   useEffect(() => {
     refreshBalancesRef.current = wallet.refreshBalances;
+    checkAllowanceRef.current = wallet.checkAllowance;
     smartWalletAddressRef.current = wallet.smartWalletAddress;
     walletReadyRef.current = wallet.isReady;
-  }, [wallet.isReady, wallet.refreshBalances, wallet.smartWalletAddress]);
+  }, [wallet.checkAllowance, wallet.isReady, wallet.refreshBalances, wallet.smartWalletAddress]);
 
   const waitForWalletReady = useCallback(async () => {
     if (walletReadyRef.current && smartWalletAddressRef.current) {
@@ -140,7 +143,20 @@ export function BalanceProvider({ children }: { children: ReactNode }) {
       dispatch({ type: "FETCH_START" });
 
       try {
-        const result = await refreshBalancesRef.current();
+        const smartWalletAddress = smartWalletAddressRef.current;
+        if (!smartWalletAddress) {
+          dispatch({ type: "FETCH_ERROR", error: "Smart wallet address unavailable" });
+          return false;
+        }
+
+        const [result, allowance] = await Promise.all([
+          refreshBalancesRef.current(),
+          checkAllowanceRef.current(
+            TOKEN_ADDRESS,
+            smartWalletAddress,
+            VERIFIER_ADDRESS,
+          ),
+        ]);
         if (!result) {
           dispatch({ type: "FETCH_ERROR", error: "Failed to fetch balance" });
           return false;
@@ -149,7 +165,7 @@ export function BalanceProvider({ children }: { children: ReactNode }) {
         dispatch({
           type: "FETCH_SUCCESS",
           balances: { usdc: result.usdcBalance, usdt: result.usdtBalance },
-          allowance: BigInt(0),
+          allowance,
           ethBalance: result.nativeBalance,
         });
         return true;
