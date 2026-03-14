@@ -16,6 +16,7 @@ export const CHAIN_ID = 84532 as const;
 export const USDC_ADDRESS: Address = "0xba50Cd2A20f6DA35D788639E581bca8d0B5d4D5f";
 export const TOKEN_ADDRESS: Address = USDC_ADDRESS; // Primary payment token
 export const USDT_ADDRESS: Address = "0x0a215D8ba66387DCA84B284D18c3B4ec3de6E54a";
+export const BITGO_MERCHANT_USDC_ADDRESS: Address = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 
 // ============ Verifier Contract ============
 
@@ -47,6 +48,13 @@ export const TOKENS: Record<string, TokenConfig> = {
   },
 };
 
+export const BITGO_MERCHANT_TOKEN: TokenConfig = {
+  address: BITGO_MERCHANT_USDC_ADDRESS,
+  symbol: "USDC",
+  name: "USD Coin (BitGo Merchant)",
+  decimals: 6,
+};
+
 export const SUPPORTED_PAYMENT_TOKEN_ADDRESSES = Object.values(TOKENS).map(
   (token) => token.address,
 );
@@ -76,6 +84,18 @@ export function isSupportedPaymentToken(address?: string | null): address is Add
   return SUPPORTED_PAYMENT_TOKEN_ADDRESSES.some(
     (tokenAddress) => tokenAddress.toLowerCase() === normalized,
   );
+}
+
+export function isSupportedBitGoMerchantToken(address?: string | null): address is Address {
+  if (!address) {
+    return false;
+  }
+
+  return address.toLowerCase() === BITGO_MERCHANT_TOKEN.address.toLowerCase();
+}
+
+export function getBitGoMerchantTokenSymbolByAddress(address?: string | null, fallback = "TOKEN") {
+  return isSupportedBitGoMerchantToken(address) ? BITGO_MERCHANT_TOKEN.symbol : fallback;
 }
 
 export const TOKEN_ABI = [
