@@ -16,7 +16,10 @@ class AudioFeedbackModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val paymentToneGenerator = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
+    // ALARM stream for maximum loudness on payment success
+    private val paymentToneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, 100)
+    // Lower volume for disconnect indication (remove phone prompt)
+    private val disconnectToneGenerator = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 50)
     private var nfcPlayer: MediaPlayer? = null
 
     override fun getName(): String = "AudioFeedbackModule"
@@ -67,24 +70,39 @@ class AudioFeedbackModule(reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun playNfcDone(promise: Promise) {
-        playToneSequence(
+        playToneSequenceWithVolume(
             listOf(
                 ToneStep(ToneGenerator.TONE_PROP_ACK, 150, 0),
                 ToneStep(ToneGenerator.TONE_PROP_ACK, 150, 200),
             ),
             "NFC done tone",
+            paymentToneGenerator,
+            promise
+        )
+    }
+
+    @ReactMethod
+    fun playDisconnectBeep(promise: Promise) {
+        playToneSequenceWithVolume(
+            listOf(
+                // Short lower-volume beep to indicate "remove your phone"
+                ToneStep(ToneGenerator.TONE_PROP_BEEP, 200, 0),
+            ),
+            "Disconnect beep",
+            disconnectToneGenerator,
             promise
         )
     }
 
     @ReactMethod
     fun playPaymentSuccess(promise: Promise) {
-        playToneSequence(
+        playToneSequenceWithVolume(
             listOf(
-                // Single longer, lower tone to indicate success
+                // LOUD success confirmation tone using ALARM stream
                 ToneStep(ToneGenerator.TONE_CDMA_CONFIRM, 400, 0),
             ),
             "Payment success tone",
+            paymentToneGenerator,
             promise
         )
     }
@@ -97,14 +115,19 @@ class AudioFeedbackModule(reactContext: ReactApplicationContext) :
     fun removeListeners(count: Int) {
     }
 
-    private fun playToneSequence(steps: List<ToneStep>, label: String, promise: Promise) {
+    private fun playToneSequenceWithVolume(
+        steps: List<ToneStep>,
+        label: String,
+        generator: ToneGenerator,
+        promise: Promise
+    ) {
         try {
             mainHandler.removeCallbacksAndMessages(null)
-            paymentToneGenerator.stopTone()
+            generator.stopTone()
 
             steps.forEach { step ->
                 mainHandler.postDelayed(
-                    { paymentToneGenerator.startTone(step.tone, step.durationMs) },
+                    { generator.startTone(step.tone, step.durationMs) },
                     step.delayMs
                 )
             }

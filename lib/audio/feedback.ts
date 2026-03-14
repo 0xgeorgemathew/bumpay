@@ -5,6 +5,7 @@ const { AudioFeedbackModule } = NativeModules as {
     playNfcComplete: () => Promise<string>;
     playNfcDone: () => Promise<string>;
     playPaymentSuccess: () => Promise<string>;
+    playDisconnectBeep: () => Promise<string>;
   };
 };
 
@@ -19,7 +20,7 @@ function warnMissingModule() {
   console.warn("AudioFeedbackModule is unavailable. Rebuild the Android app to enable sounds.");
 }
 
-async function play(method: "playNfcComplete" | "playNfcDone" | "playPaymentSuccess") {
+async function play(method: "playNfcComplete" | "playNfcDone" | "playPaymentSuccess" | "playDisconnectBeep") {
   if (!AudioFeedbackModule || typeof AudioFeedbackModule[method] !== "function") {
     warnMissingModule();
     return;
@@ -40,6 +41,24 @@ export function playNfcDoneSound() {
   return play("playNfcDone");
 }
 
+export function playDisconnectBeep() {
+  return play("playDisconnectBeep");
+}
+
+export async function playDisconnectBeepAsync() {
+  if (!AudioFeedbackModule?.playDisconnectBeep) {
+    warnMissingModule();
+    return;
+  }
+  try {
+    await AudioFeedbackModule.playDisconnectBeep();
+    // Wait for beep + small gap before next sound
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  } catch (error) {
+    console.error("Failed to play disconnect beep", error);
+  }
+}
+
 export function playPaymentSuccessSound() {
   return play("playPaymentSuccess");
 }
@@ -51,8 +70,7 @@ export async function playPaymentSuccessSoundAsync() {
   }
   try {
     await AudioFeedbackModule.playPaymentSuccess();
-    // Wait for sound to complete
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    // No artificial delay - sound plays immediately
   } catch (error) {
     console.error("Failed to play payment success sound", error);
   }
