@@ -10,7 +10,9 @@ import {
 } from "react";
 import { usePrivy } from "@privy-io/expo";
 import { Ionicons } from "@expo/vector-icons";
+import type { Address } from "viem";
 import { useOperationalWallet } from "./wallet";
+import { getEnsClaimStatus } from "./ens/service";
 import { loadTransactions, saveTransactions } from "./transactions/storage";
 import {
   formatRelativeDate,
@@ -136,11 +138,13 @@ export function TransactionProvider({ children }: { children: ReactNode }) {
 
   const addTransaction = useCallback(
     async (params: PaymentSuccessParams): Promise<void> => {
-      const address = wallet.smartWalletAddress;
-      if (!address) {
-        console.warn("Cannot add transaction: wallet not ready");
-        return;
-      }
+      const derivedOwnerAddress =
+        params.role === "receiver" ? params.to.toLowerCase() : params.from.toLowerCase();
+      const address = wallet.smartWalletAddress ?? derivedOwnerAddress;
+      const counterpartyAddress =
+        params.role === "receiver" ? params.from : params.to;
+      const fallbackLabel =
+        params.role === "receiver" ? params.fromLabel : params.toLabel;
 
       // Convert amount to USD (assuming stablecoin, so 1:1)
       const amountUsd = Number(params.amount) / 1e6; // Assuming 6 decimals for USDC/USDT
@@ -148,13 +152,21 @@ export function TransactionProvider({ children }: { children: ReactNode }) {
       // Determine if positive (received) or negative (sent)
       const isPositive = params.role === "receiver";
 
+      let resolvedCounterpartyEns: string | null = null;
+      try {
+        const status = await getEnsClaimStatus(counterpartyAddress as Address);
+        resolvedCounterpartyEns = status.fullName;
+      } catch (error) {
+        console.warn("Failed to resolve ENS for recent activity:", error);
+      }
+
       // Get display name for counterparty
       const name = getDisplayName(
         params.role,
         params.from,
         params.to,
-        params.fromLabel ?? null,
-        params.toLabel ?? null,
+        params.role === "receiver" ? resolvedCounterpartyEns ?? fallbackLabel ?? null : null,
+        params.role === "payer" ? resolvedCounterpartyEns ?? fallbackLabel ?? null : null,
         address,
       );
 

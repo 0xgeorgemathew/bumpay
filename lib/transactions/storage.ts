@@ -30,11 +30,14 @@ export async function saveTransactions(
 ): Promise<void> {
   try {
     const key = getStorageKey(walletAddress);
+    const existingRaw = await SecureStore.getItemAsync(key);
+    const existing = existingRaw ? (JSON.parse(existingRaw) as DisplayTransaction[]) : [];
+    const combined = [...transactions, ...existing];
 
     // Deduplicate by id (txHash)
     const seen = new Set<string>();
     const deduped: DisplayTransaction[] = [];
-    for (const tx of transactions) {
+    for (const tx of combined) {
       if (!seen.has(tx.id)) {
         seen.add(tx.id);
         deduped.push(tx);

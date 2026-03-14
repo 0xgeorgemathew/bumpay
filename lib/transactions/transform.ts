@@ -62,24 +62,23 @@ export function getDisplayName(
   toLabel: string | null,
   userAddress: string,
 ): string {
-  const shortFrom = from.slice(0, 6) + "..." + from.slice(-4);
-  const shortTo = to.slice(0, 6) + "..." + to.slice(-4);
   const normalizedUser = userAddress.toLowerCase();
+  const fallbackName = "Unknown ENS";
 
   if (role === "payer") {
     // User sent money - show receiver info
     if (to.toLowerCase() === normalizedUser) {
       // Edge case: payer and receiver are same (shouldn't happen)
-      return fromLabel ?? shortFrom;
+      return fromLabel ?? fallbackName;
     }
-    return toLabel ?? shortTo;
+    return toLabel ?? fallbackName;
   } else {
     // User received money - show payer info
     if (from.toLowerCase() === normalizedUser) {
       // Edge case: receiver and payer are same (shouldn't happen)
-      return toLabel ?? shortTo;
+      return toLabel ?? fallbackName;
     }
-    return fromLabel ?? shortFrom;
+    return fromLabel ?? fallbackName;
   }
 }
 
