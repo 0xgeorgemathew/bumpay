@@ -8,10 +8,11 @@ export type MessageKind =
   | "PAYMENT_REQUEST"
   | "PAYMENT_INTENT"
   | "MERCHANT_PAYMENT_REQUEST"
+  | "MERCHANT_BITGO_PAYMENT_REQUEST"
   | "MERCHANT_PAYMENT_AUTHORIZATION"
   | "ERROR";
 
-type ShortMessageKind = "Q" | "R" | "I" | "M" | "A" | "E";
+type ShortMessageKind = "Q" | "R" | "I" | "M" | "B" | "A" | "E";
 
 interface ProtocolEnvelope {
   version: number;
@@ -94,6 +95,24 @@ export type MerchantPaymentRequestMessage = ProtocolEnvelope & {
 };
 
 /**
+ * BitGo-backed merchant payment request message.
+ * Sent from merchant to customer so the customer can pay a fresh BitGo address.
+ */
+export type MerchantBitGoPaymentRequestMessage = ProtocolEnvelope & {
+  kind: "MERCHANT_BITGO_PAYMENT_REQUEST";
+  checkoutId: string;
+  requestId: string;
+  receiveAddress: Address;
+  amount: string;
+  tokenSymbol: string;
+  tokenAddress: Address;
+  chainId: number;
+  expiresAt: number;
+  merchantName?: string;
+  rail: "bitgo";
+};
+
+/**
  * Merchant payment authorization message
  * Sent from customer to merchant (POS) after signing
  */
@@ -117,6 +136,7 @@ export type ProtocolMessage =
   | PaymentRequestMessage
   | PaymentIntentMessage
   | MerchantPaymentRequestMessage
+  | MerchantBitGoPaymentRequestMessage
   | MerchantPaymentAuthorizationMessage
   | ErrorMessage;
 
@@ -125,6 +145,7 @@ const SHORT_KIND_BY_KIND: Record<MessageKind, ShortMessageKind> = {
   PAYMENT_REQUEST: "R",
   PAYMENT_INTENT: "I",
   MERCHANT_PAYMENT_REQUEST: "M",
+  MERCHANT_BITGO_PAYMENT_REQUEST: "B",
   MERCHANT_PAYMENT_AUTHORIZATION: "A",
   ERROR: "E",
 };
@@ -143,6 +164,9 @@ function decodeMessageKind(value: unknown): MessageKind | null {
     case "M":
     case "MERCHANT_PAYMENT_REQUEST":
       return "MERCHANT_PAYMENT_REQUEST";
+    case "B":
+    case "MERCHANT_BITGO_PAYMENT_REQUEST":
+      return "MERCHANT_BITGO_PAYMENT_REQUEST";
     case "A":
     case "MERCHANT_PAYMENT_AUTHORIZATION":
       return "MERCHANT_PAYMENT_AUTHORIZATION";
@@ -345,6 +369,46 @@ export function parseProtocolMessage(data: string): ProtocolMessage | null {
         deadline,
         nonce,
         merchantName: readOptionalString(parsed, "merchantName"),
+      };
+    }
+
+    if (kind === "MERCHANT_BITGO_PAYMENT_REQUEST") {
+      const checkoutId = readString(parsed, "checkoutId");
+      const requestId = readString(parsed, "requestId");
+      const receiveAddress = readString(parsed, "receiveAddress");
+      const amount = readString(parsed, "amount");
+      const tokenSymbol = readString(parsed, "tokenSymbol");
+      const tokenAddress = readString(parsed, "tokenAddress");
+      const chainId = readNumber(parsed, "chainId");
+      const expiresAt = readNumber(parsed, "expiresAt");
+
+      if (
+        !checkoutId ||
+        !requestId ||
+        !receiveAddress ||
+        !amount ||
+        !tokenSymbol ||
+        !tokenAddress ||
+        chainId === null ||
+        expiresAt === null
+      ) {
+        return null;
+      }
+
+      return {
+        version,
+        sessionId,
+        kind,
+        checkoutId,
+        requestId,
+        receiveAddress: receiveAddress as Address,
+        amount,
+        tokenSymbol,
+        tokenAddress: tokenAddress as Address,
+        chainId,
+        expiresAt,
+        merchantName: readOptionalString(parsed, "merchantName"),
+        rail: "bitgo",
       };
     }
 

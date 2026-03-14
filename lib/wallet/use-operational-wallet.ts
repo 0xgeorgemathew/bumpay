@@ -58,6 +58,7 @@ export interface UseOperationalWalletResult {
   error: string | null;
   retryProvisioning: () => void;
   refreshBalances: () => Promise<WalletSnapshot | null>;
+  readTokenBalance: (tokenAddress: Address) => Promise<bigint>;
   mintTestTokens: (amount?: bigint) => Promise<Hex | null>;
   mintTestUSDT: (amount?: bigint) => Promise<Hex | null>;
   sendTokenTransfer: (tokenAddress: Address, recipient: Address, amount: bigint) => Promise<Hex | null>;
@@ -364,6 +365,33 @@ function useOperationalWalletValue(): UseOperationalWalletResult {
     }
   }, [isReady, smartWalletAddress]);
 
+  const readTokenBalance = useCallback(
+    async (tokenAddress: Address): Promise<bigint> => {
+      if (!smartWalletAddress) {
+        setTransactionError("No smart wallet address");
+        throw new Error("No smart wallet address");
+      }
+
+      try {
+        const balance = await publicClient.readContract({
+          address: tokenAddress,
+          abi: TOKEN_ABI,
+          functionName: "balanceOf",
+          args: [smartWalletAddress],
+        });
+
+        setTransactionError(null);
+        return balance as bigint;
+      } catch (readError) {
+        const message =
+          readError instanceof Error ? readError.message : "Failed to read token balance";
+        setTransactionError(message);
+        throw new Error(message);
+      }
+    },
+    [smartWalletAddress],
+  );
+
   const sendContractTransaction = useCallback(
     async (to: Address, data: Hex, value: bigint = BigInt(0)): Promise<Hex | null> => {
       if (!isReady) {
@@ -584,6 +612,7 @@ function useOperationalWalletValue(): UseOperationalWalletResult {
     error,
     retryProvisioning,
     refreshBalances,
+    readTokenBalance,
     mintTestTokens,
     mintTestUSDT,
     sendTokenTransfer,

@@ -41,7 +41,11 @@ export default function RootLayout() {
                 <Stack.Screen name="pay" />
                 <Stack.Screen name="pay-nfc" />
                 <Stack.Screen name="request-payment" />
+                <Stack.Screen name="merchant" />
+                <Stack.Screen name="merchant-bitgo" />
+                <Stack.Screen name="merchant-bitgo-withdraw" />
                 <Stack.Screen name="pay-merchant" />
+                <Stack.Screen name="pay-merchant-bitgo" />
                 <Stack.Screen name="receive" />
                 <Stack.Screen name="payment-success" />
                 <Stack.Screen name="ens-onboarding" />
