@@ -11,7 +11,7 @@ export default function MerchantTabScreen() {
 
   const handleRequestPayment = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    router.push("/merchant" as never);
+    router.push("/request-payment" as never);
   };
 
   const handlePayMerchant = async () => {

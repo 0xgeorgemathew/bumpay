@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -7,16 +7,19 @@ import {
   TextInput,
   ActivityIndicator,
   KeyboardAvoidingView,
+  Keyboard,
+  Linking,
   Platform,
 } from "react-native";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { usePrivy } from "@privy-io/expo";
 import { parseUnits, formatUnits, type Hex } from "viem";
-import { COLORS, BORDER_THICK, SHADOW } from "../constants/theme";
+import { COLORS, BORDER_THICK } from "../constants/theme";
 import { useOperationalWallet } from "../lib/wallet";
 import { playNfcCompleteSound } from "../lib/audio/feedback";
 import { CardEmulation, CardEmulationEvents } from "../lib/nfc/card-emulation";
+import { getEnsClaimStatus } from "../lib/ens/service";
 import {
   TOKEN_DECIMALS,
   TOKEN_SYMBOL,
@@ -32,11 +35,11 @@ import {
   type ParsedAuthorization,
 } from "../lib/payments/merchant-session";
 import { getPaymentTrackingPollingClient } from "../lib/payments/payment-tracking-client";
+import { buildPaymentExplorerUrl } from "../lib/payments/payment-tracking-types";
 
 type MerchantScreenState =
   | "enter_amount"
   | "ready_to_receive"
-  | "authorization_received"
   | "claiming_payment"
   | "success"
   | "error";
@@ -68,14 +71,20 @@ function formatPaymentAmount(amount: bigint): string {
   return formatUnits(amount, TOKEN_DECIMALS);
 }
 
+function shortAddress(address?: string | null): string {
+  if (!address) {
+    return "UNKNOWN";
+  }
+
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
 function getStatusLabel(state: MerchantScreenState, error?: MerchantError): string {
   switch (state) {
     case "enter_amount":
       return "ENTER AMOUNT";
     case "ready_to_receive":
       return "READY TO RECEIVE";
-    case "authorization_received":
-      return "AUTHORIZATION RECEIVED";
     case "claiming_payment":
       return "CLAIMING PAYMENT";
     case "success":
@@ -92,7 +101,6 @@ export default function MerchantScreen() {
   const { user, isReady: privyReady } = usePrivy();
   const {
     smartWalletAddress,
-    status: walletStatus,
     isReady: walletReady,
     sendContractTransaction,
   } = useOperationalWallet();
@@ -101,8 +109,12 @@ export default function MerchantScreen() {
   const [amountInput, setAmountInput] = useState("");
   const [errorType, setErrorType] = useState<MerchantError | undefined>();
   const [session, setSession] = useState<MerchantSession | null>(null);
-  const [authorization, setAuthorization] = useState<ParsedAuthorization | null>(null);
   const [claimTxHash, setClaimTxHash] = useState<Hex | null>(null);
+  const [merchantEnsName, setMerchantEnsName] = useState<string | null>(null);
+  const [customerEnsName, setCustomerEnsName] = useState<string | null>(null);
+  const [customerAddress, setCustomerAddress] = useState<string | null>(null);
+  const isStartingSessionRef = useRef(false);
+  const isClaimingPaymentRef = useRef(false);
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -122,10 +134,69 @@ export default function MerchantScreen() {
     };
   }, []);
 
-  // Listen for authorization from customer
+  useEffect(() => {
+    if (!smartWalletAddress) {
+      setMerchantEnsName(null);
+      return;
+    }
+
+    getEnsClaimStatus(smartWalletAddress)
+      .then((status) => {
+        setMerchantEnsName(status.fullName);
+      })
+      .catch((error) => {
+        console.warn("Failed to load merchant ENS:", error);
+        setMerchantEnsName(null);
+      });
+  }, [smartWalletAddress]);
+
+  const handleClaimPayment = useCallback(
+    async (activeSession: MerchantSession, parsedAuthorization: ParsedAuthorization) => {
+      if (isClaimingPaymentRef.current) {
+        return;
+      }
+
+      isClaimingPaymentRef.current = true;
+      setScreenState("claiming_payment");
+
+      try {
+        const tx = buildClaimPaymentTransaction(activeSession, parsedAuthorization);
+        const txHash = await sendContractTransaction(tx.to, tx.data);
+        if (!txHash) {
+          throw new Error("Transaction failed");
+        }
+
+        const receipt = await getPaymentTrackingPollingClient().waitForTransactionReceipt({
+          hash: txHash,
+        });
+        if (receipt.status !== "success") {
+          throw new Error("Claim transaction reverted");
+        }
+
+        setClaimTxHash(txHash);
+        setScreenState("success");
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        await playNfcCompleteSound();
+
+        await CardEmulation.setReady(false);
+        await CardEmulation.setMerchantMode(false);
+        await CardEmulation.clearPaymentRequest();
+        await CardEmulation.clearPaymentAuthorization();
+      } catch (err) {
+        console.error("Failed to claim payment:", err);
+        setErrorType("claim_failed");
+        setScreenState("error");
+      } finally {
+        isClaimingPaymentRef.current = false;
+      }
+    },
+    [sendContractTransaction],
+  );
+
+  // Listen for authorization from customer and claim automatically.
   useEffect(() => {
     const subscription = CardEmulationEvents.onStateChanged(async (state) => {
-      if (!state.hasPaymentAuthorization || !session) {
+      if (!state.hasPaymentAuthorization || !session || isClaimingPaymentRef.current) {
         return;
       }
 
@@ -142,19 +213,33 @@ export default function MerchantScreen() {
           return;
         }
 
-        if (isSessionExpired(session) || !matchesMerchantSession(session, parsed)) {
+        if (isSessionExpired(session)) {
+          setErrorType("session_expired");
+          setScreenState("error");
+          await CardEmulation.clearPaymentAuthorization();
+          return;
+        }
+
+        if (!matchesMerchantSession(session, parsed)) {
           setErrorType("authorization_invalid");
           setScreenState("error");
           await CardEmulation.clearPaymentAuthorization();
           return;
         }
 
-        setAuthorization(parsed);
-        setScreenState("authorization_received");
-        await playNfcCompleteSound();
+        setCustomerAddress(parsed.customerAddress);
+        getEnsClaimStatus(parsed.customerAddress)
+          .then((status) => {
+            setCustomerEnsName(status.fullName);
+          })
+          .catch((error) => {
+            console.warn("Failed to load customer ENS:", error);
+            setCustomerEnsName(null);
+          });
 
-        // Clear the authorization so we don't process it again
+        await playNfcCompleteSound();
         await CardEmulation.clearPaymentAuthorization();
+        await handleClaimPayment(session, parsed);
       } catch (err) {
         console.error("Failed to process authorization:", err);
         setErrorType("authorization_invalid");
@@ -165,9 +250,13 @@ export default function MerchantScreen() {
     return () => {
       subscription?.remove();
     };
-  }, [session]);
+  }, [handleClaimPayment, session]);
 
   const handleStartSession = useCallback(async () => {
+    if (isStartingSessionRef.current || screenState !== "enter_amount") {
+      return;
+    }
+
     if (!walletReady || !smartWalletAddress) {
       setErrorType("wallet_not_ready");
       setScreenState("error");
@@ -181,9 +270,17 @@ export default function MerchantScreen() {
       return;
     }
 
+    isStartingSessionRef.current = true;
+    Keyboard.dismiss();
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
 
-    const newSession = createMerchantSession(smartWalletAddress, amount);
+    const newSession = createMerchantSession(
+      smartWalletAddress,
+      amount,
+      undefined,
+      undefined,
+      merchantEnsName ?? undefined,
+    );
 
     try {
       // Set up merchant mode
@@ -196,55 +293,39 @@ export default function MerchantScreen() {
       await CardEmulation.setReady(true);
       await CardEmulation.startListening();
 
+      setErrorType(undefined);
+      setClaimTxHash(null);
+      setCustomerEnsName(null);
+      setCustomerAddress(null);
       setSession(newSession);
       setScreenState("ready_to_receive");
     } catch (err) {
       console.error("Failed to start merchant session:", err);
       setErrorType("publish_failed");
       setScreenState("error");
+    } finally {
+      isStartingSessionRef.current = false;
     }
-  }, [amountInput, smartWalletAddress, walletReady]);
+  }, [amountInput, merchantEnsName, screenState, smartWalletAddress, walletReady]);
 
-  const handleClaimPayment = useCallback(async () => {
-    if (!session || !authorization) {
-      setErrorType("authorization_invalid");
-      setScreenState("error");
+  useEffect(() => {
+    if (
+      screenState !== "enter_amount" ||
+      !walletReady ||
+      !smartWalletAddress ||
+      !parsePaymentAmount(amountInput)
+    ) {
       return;
     }
 
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setScreenState("claiming_payment");
+    const timeoutId = setTimeout(() => {
+      handleStartSession().catch(console.error);
+    }, 1000);
 
-    try {
-      const tx = buildClaimPaymentTransaction(session, authorization);
-      const txHash = await sendContractTransaction(tx.to, tx.data);
-      if (!txHash) {
-        throw new Error("Transaction failed");
-      }
-
-      const receipt = await getPaymentTrackingPollingClient().waitForTransactionReceipt({
-        hash: txHash,
-      });
-      if (receipt.status !== "success") {
-        throw new Error("Claim transaction reverted");
-      }
-
-      setClaimTxHash(txHash);
-      setScreenState("success");
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      await playNfcCompleteSound();
-
-      // Clean up
-      await CardEmulation.setReady(false);
-      await CardEmulation.setMerchantMode(false);
-      await CardEmulation.clearPaymentRequest();
-      await CardEmulation.clearPaymentAuthorization();
-    } catch (err) {
-      console.error("Failed to claim payment:", err);
-      setErrorType("claim_failed");
-      setScreenState("error");
-    }
-  }, [authorization, sendContractTransaction, session]);
+    return () => {
+      clearTimeout(timeoutId);
+    };
+  }, [amountInput, handleStartSession, screenState, smartWalletAddress, walletReady]);
 
   const handleCancel = useCallback(async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
@@ -265,8 +346,9 @@ export default function MerchantScreen() {
     setAmountInput("");
     setErrorType(undefined);
     setSession(null);
-    setAuthorization(null);
     setClaimTxHash(null);
+    setCustomerEnsName(null);
+    setCustomerAddress(null);
   }, []);
 
   const displayAmount = useMemo(() => {
@@ -277,6 +359,22 @@ export default function MerchantScreen() {
   }, [amountInput, session]);
 
   const backgroundColor = COLORS.green400;
+  const claimExplorerUrl = useMemo(() => {
+    if (!claimTxHash) {
+      return null;
+    }
+
+    return buildPaymentExplorerUrl(claimTxHash);
+  }, [claimTxHash]);
+
+  const handleOpenClaimExplorer = useCallback(async () => {
+    if (!claimExplorerUrl) {
+      return;
+    }
+
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    await Linking.openURL(claimExplorerUrl);
+  }, [claimExplorerUrl]);
 
   return (
     <KeyboardAvoidingView
@@ -306,19 +404,25 @@ export default function MerchantScreen() {
                   style={styles.amountInput}
                   value={amountInput}
                   onChangeText={setAmountInput}
+                  onEndEditing={() => {
+                    if (parsePaymentAmount(amountInput)) {
+                      handleStartSession().catch(console.error);
+                    }
+                  }}
                   placeholder="0.00"
                   placeholderTextColor={COLORS.textMuted}
                   keyboardType="decimal-pad"
                   autoFocus
                 />
+                <Text style={styles.inputHint}>Payment request starts automatically</Text>
               </View>
             ) : (
               <View style={styles.statusContent}>
                 {screenState === "ready_to_receive" && (
-                  <Text style={styles.statusText}>WAITING FOR CUSTOMER TAP</Text>
-                )}
-                {screenState === "authorization_received" && (
-                  <Text style={styles.statusText}>AUTHORIZATION RECEIVED</Text>
+                  <>
+                    <Text style={styles.statusText}>WAITING FOR CUSTOMER TAP</Text>
+                    <Text style={styles.helperText}>Hold the customer phone to this device</Text>
+                  </>
                 )}
                 {screenState === "claiming_payment" && (
                   <View style={styles.loadingContainer}>
@@ -330,8 +434,15 @@ export default function MerchantScreen() {
                   <View style={styles.successContainer}>
                     <Text style={styles.successIcon}>✓</Text>
                     <Text style={styles.statusText}>PAYMENT RECEIVED</Text>
+                    <Text style={styles.helperText}>
+                      {customerEnsName ?? shortAddress(customerAddress)} paid {merchantEnsName ?? "merchant"}
+                    </Text>
                     {claimTxHash && (
-                      <Text style={styles.txHashText}>{claimTxHash.slice(0, 10)}...{claimTxHash.slice(-8)}</Text>
+                      <Pressable onPress={handleOpenClaimExplorer}>
+                        <Text style={[styles.txHashText, styles.txHashLink]}>
+                          {claimTxHash.slice(0, 10)}...{claimTxHash.slice(-8)}
+                        </Text>
+                      </Pressable>
                     )}
                   </View>
                 )}
@@ -350,10 +461,21 @@ export default function MerchantScreen() {
         {smartWalletAddress && (
           <View style={styles.infoBoxShadow}>
             <View style={styles.infoBox}>
-              <Text style={styles.infoLabel}>MERCHANT WALLET</Text>
+              <Text style={styles.infoLabel}>MERCHANT</Text>
+              <Text style={styles.infoText}>{merchantEnsName ?? shortAddress(smartWalletAddress)}</Text>
+              <Text style={styles.infoSubtext}>{shortAddress(smartWalletAddress)}</Text>
+            </View>
+          </View>
+        )}
+
+        {session?.merchantAddress && (screenState === "success" || screenState === "claiming_payment") && (
+          <View style={styles.infoBoxShadow}>
+            <View style={styles.infoBox}>
+              <Text style={styles.infoLabel}>CUSTOMER</Text>
               <Text style={styles.infoText}>
-                {smartWalletAddress.slice(0, 6)}...{smartWalletAddress.slice(-4)}
+                {customerEnsName ?? (customerAddress ? shortAddress(customerAddress) : "Resolving payer...")}
               </Text>
+              {customerAddress && <Text style={styles.infoSubtext}>{shortAddress(customerAddress)}</Text>}
             </View>
           </View>
         )}
@@ -372,22 +494,11 @@ export default function MerchantScreen() {
 
         {/* Action Buttons */}
         {screenState === "enter_amount" && (
-          <>
-            <View style={styles.footerButtonShadow}>
-              <Pressable
-                onPress={handleStartSession}
-                style={styles.primaryButton}
-                disabled={!walletReady || !parsePaymentAmount(amountInput)}
-              >
-                <Text style={styles.primaryButtonText}>START PAYMENT</Text>
-              </Pressable>
-            </View>
-            <View style={styles.footerButtonShadow}>
-              <Pressable onPress={handleCancel} style={styles.footerButton}>
-                <Text style={styles.footerButtonText}>CANCEL</Text>
-              </Pressable>
-            </View>
-          </>
+          <View style={styles.footerButtonShadow}>
+            <Pressable onPress={handleCancel} style={styles.footerButton}>
+              <Text style={styles.footerButtonText}>CANCEL</Text>
+            </Pressable>
+          </View>
         )}
 
         {screenState === "ready_to_receive" && (
@@ -398,27 +509,21 @@ export default function MerchantScreen() {
           </View>
         )}
 
-        {screenState === "authorization_received" && (
+        {(screenState === "success" || screenState === "error") && (
           <>
-            <View style={styles.footerButtonShadow}>
-              <Pressable onPress={handleClaimPayment} style={styles.primaryButton}>
-                <Text style={styles.primaryButtonText}>CLAIM PAYMENT</Text>
-              </Pressable>
-            </View>
+            {claimExplorerUrl && screenState === "success" && (
+              <View style={styles.footerButtonShadow}>
+                <Pressable onPress={handleOpenClaimExplorer} style={styles.primaryButton}>
+                  <Text style={styles.primaryButtonText}>VIEW ON EXPLORER</Text>
+                </Pressable>
+              </View>
+            )}
             <View style={styles.footerButtonShadow}>
               <Pressable onPress={handleReset} style={styles.footerButton}>
-                <Text style={styles.footerButtonText}>CANCEL</Text>
+                <Text style={styles.footerButtonText}>NEW PAYMENT</Text>
               </Pressable>
             </View>
           </>
-        )}
-
-        {(screenState === "success" || screenState === "error") && (
-          <View style={styles.footerButtonShadow}>
-            <Pressable onPress={handleReset} style={styles.footerButton}>
-              <Text style={styles.footerButtonText}>NEW PAYMENT</Text>
-            </Pressable>
-          </View>
         )}
       </View>
     </KeyboardAvoidingView>
@@ -496,9 +601,23 @@ const styles = StyleSheet.create({
     textAlign: "center",
     padding: 0,
   },
+  inputHint: {
+    marginTop: 16,
+    fontSize: 12,
+    fontWeight: "800",
+    textAlign: "center",
+    color: COLORS.textMuted,
+    letterSpacing: 1,
+  },
   statusContent: {
     alignItems: "center",
     gap: 16,
+  },
+  helperText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: COLORS.textMuted,
+    textAlign: "center",
   },
   statusText: {
     fontSize: 18,
@@ -567,6 +686,13 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
+  infoSubtext: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: COLORS.textMuted,
+    marginTop: 4,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
   footerStack: {
     width: "100%",
     gap: 12,
@@ -626,5 +752,9 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     alignItems: "center",
     transform: [{ translateX: -SHADOW_OFFSET.width }, { translateY: -SHADOW_OFFSET.height }],
+  },
+  txHashLink: {
+    color: COLORS.primaryBlue,
+    textDecorationLine: "underline",
   },
 });
