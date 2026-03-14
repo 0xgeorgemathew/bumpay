@@ -2,13 +2,34 @@ import {
   NativeEventEmitter,
   NativeModules,
   type EmitterSubscription,
+  type NativeModule,
 } from "react-native";
 import {
   assertNativeModuleMethod,
   getNativeModuleError,
+  isNativeModuleAvailable,
+  warnNativeModuleUnavailable,
 } from "./native-module";
 
 const { CardEmulationModule } = NativeModules;
+const REQUIRED_CARD_EMULATION_METHODS = [
+  "addListener",
+  "removeListeners",
+  "setReady",
+  "setPaymentRequest",
+  "clearPaymentRequest",
+  "getPaymentIntent",
+  "clearPaymentIntent",
+  "setMerchantMode",
+  "getPaymentAuthorization",
+  "clearPaymentAuthorization",
+  "startListening",
+  "stopListening",
+] as const;
+const isCardEmulationModuleAvailable = isNativeModuleAvailable(
+  CardEmulationModule,
+  REQUIRED_CARD_EMULATION_METHODS,
+);
 
 function assertCardEmulationMethod(methodName: string) {
   assertNativeModuleMethod("CardEmulationModule", CardEmulationModule, methodName);
@@ -30,6 +51,11 @@ const CARD_EMULATION_EVENTS = {
 } as const;
 
 export const CardEmulation = {
+  isAvailable: (): boolean => isCardEmulationModuleAvailable,
+
+  getUnavailableReason: (): string | null =>
+    isCardEmulationModuleAvailable ? null : getNativeModuleError("CardEmulationModule"),
+
   setReady: async (ready: boolean): Promise<string> => {
     assertCardEmulationMethod("setReady");
     return CardEmulationModule.setReady(ready);
@@ -83,8 +109,8 @@ export const CardEmulation = {
   },
 };
 
-const cardEmulationEmitter = CardEmulationModule
-  ? new NativeEventEmitter(CardEmulationModule)
+const cardEmulationEmitter = isCardEmulationModuleAvailable
+  ? new NativeEventEmitter(CardEmulationModule as NativeModule)
   : null;
 
 export const CardEmulationEvents = {
@@ -92,7 +118,7 @@ export const CardEmulationEvents = {
     callback: (state: CardState) => void,
   ): EmitterSubscription | null => {
     if (!cardEmulationEmitter) {
-      console.error(getNativeModuleError("CardEmulationModule"));
+      warnNativeModuleUnavailable("CardEmulationModule");
       return null;
     }
 

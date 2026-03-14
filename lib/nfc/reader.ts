@@ -2,6 +2,7 @@ import {
   NativeEventEmitter,
   NativeModules,
   type EmitterSubscription,
+  type NativeModule,
 } from "react-native";
 import type { Address } from "viem";
 import {
@@ -13,9 +14,27 @@ import {
 import {
   assertNativeModuleMethod,
   getNativeModuleError,
+  isNativeModuleAvailable,
+  warnNativeModuleUnavailable,
 } from "./native-module";
 
 const { NfcReaderModule } = NativeModules;
+const REQUIRED_READER_METHODS = [
+  "addListener",
+  "removeListeners",
+  "isNfcSupported",
+  "isNfcEnabled",
+  "setScanSession",
+  "clearScanSession",
+  "sendPaymentIntent",
+  "sendMerchantAuthorization",
+  "startReader",
+  "stopReader",
+] as const;
+const isReaderModuleAvailable = isNativeModuleAvailable(
+  NfcReaderModule,
+  REQUIRED_READER_METHODS,
+);
 
 function assertReaderMethod(methodName: string) {
   assertNativeModuleMethod("NfcReaderModule", NfcReaderModule, methodName);
@@ -143,6 +162,11 @@ const NFC_READER_EVENTS = {
 export type AnyPaymentRequest = PublishedPaymentRequest | MerchantPaymentRequest;
 
 export const NfcReader = {
+  isAvailable: (): boolean => isReaderModuleAvailable,
+
+  getUnavailableReason: (): string | null =>
+    isReaderModuleAvailable ? null : getNativeModuleError("NfcReaderModule"),
+
   isSupported: (): Promise<boolean> => {
     assertReaderMethod("isNfcSupported");
     return NfcReaderModule.isNfcSupported();
@@ -184,14 +208,16 @@ export const NfcReader = {
   },
 };
 
-const nfcReaderEmitter = NfcReaderModule ? new NativeEventEmitter(NfcReaderModule) : null;
+const nfcReaderEmitter = isReaderModuleAvailable
+  ? new NativeEventEmitter(NfcReaderModule as NativeModule)
+  : null;
 
 export const NfcReaderEvents = {
   onPaymentRequest: (
     callback: (payload: PublishedPaymentRequest) => void,
   ): EmitterSubscription | null => {
     if (!nfcReaderEmitter) {
-      console.error(getNativeModuleError("NfcReaderModule"));
+      warnNativeModuleUnavailable("NfcReaderModule");
       return null;
     }
 
@@ -213,7 +239,7 @@ export const NfcReaderEvents = {
     callback: (payload: MerchantPaymentRequest) => void,
   ): EmitterSubscription | null => {
     if (!nfcReaderEmitter) {
-      console.error(getNativeModuleError("NfcReaderModule"));
+      warnNativeModuleUnavailable("NfcReaderModule");
       return null;
     }
 
@@ -232,7 +258,7 @@ export const NfcReaderEvents = {
     callback: (payload: MerchantBitGoPaymentRequest) => void,
   ): EmitterSubscription | null => {
     if (!nfcReaderEmitter) {
-      console.error(getNativeModuleError("NfcReaderModule"));
+      warnNativeModuleUnavailable("NfcReaderModule");
       return null;
     }
 
@@ -248,7 +274,7 @@ export const NfcReaderEvents = {
 
   onError: (callback: (message: string) => void): EmitterSubscription | null => {
     if (!nfcReaderEmitter) {
-      console.error(getNativeModuleError("NfcReaderModule"));
+      warnNativeModuleUnavailable("NfcReaderModule");
       return null;
     }
 
