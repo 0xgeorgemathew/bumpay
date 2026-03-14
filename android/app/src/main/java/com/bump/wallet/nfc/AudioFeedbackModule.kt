@@ -66,11 +66,23 @@ class AudioFeedbackModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
+    fun playNfcDone(promise: Promise) {
+        playToneSequence(
+            listOf(
+                ToneStep(ToneGenerator.TONE_PROP_ACK, 150, 0),
+                ToneStep(ToneGenerator.TONE_PROP_ACK, 150, 200),
+            ),
+            "NFC done tone",
+            promise
+        )
+    }
+
+    @ReactMethod
     fun playPaymentSuccess(promise: Promise) {
         playToneSequence(
             listOf(
-                ToneStep(ToneGenerator.TONE_PROP_ACK, 140, 0),
-                ToneStep(ToneGenerator.TONE_PROP_ACK, 180, 160),
+                // Single longer, lower tone to indicate success
+                ToneStep(ToneGenerator.TONE_CDMA_CONFIRM, 400, 0),
             ),
             "Payment success tone",
             promise
