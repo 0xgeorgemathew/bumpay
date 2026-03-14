@@ -122,7 +122,7 @@ export default function TabLayout() {
             <View style={focused ? styles.iconShadow : null}>
               <View style={[styles.iconContainer, focused && styles.iconContainerActive]}>
                 <Ionicons
-                  name="card"
+                  name="cart"
                   size={24}
                   color={focused ? COLORS.textInverted : COLORS.textPrimary}
                 />

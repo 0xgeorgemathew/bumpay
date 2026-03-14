@@ -1,5 +1,5 @@
-import { useEffect, useRef, useMemo } from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable } from "react-native";
+import { useEffect, useMemo, useRef } from "react";
+import { View, Text, StyleSheet, Pressable } from "react-native";
 import { useRouter } from "expo-router";
 import { usePrivy } from "@privy-io/expo";
 import { HomeHeader } from "../../components/HomeHeader";
@@ -81,18 +81,10 @@ export default function HomeScreen() {
     await refreshBalance({ waitForWallet: true });
   };
 
-  const handleViewAll = () => {
-    router.push("/(tabs)/history" as never);
-  };
-
   return (
     <View style={styles.container}>
-      <HomeHeader />
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
+      <View style={styles.content}>
+        <HomeHeader />
         <BalanceCard
           tokens={tokens}
           onDetailsPress={handleDetails}
@@ -134,9 +126,9 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.transactionSection}>
-          <TransactionList onViewAll={handleViewAll} />
+          <TransactionList />
         </View>
-      </ScrollView>
+      </View>
     </View>
   );
 }
@@ -145,6 +137,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.backgroundLight,
+  },
+  content: {
+    flex: 1,
+    padding: 16,
   },
   loadingBox: {
     flex: 1,
@@ -157,18 +153,12 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     letterSpacing: 4,
   },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 16,
-    flexGrow: 1,
-  },
   actionSection: {
     marginTop: 20,
   },
   transactionSection: {
     marginTop: 20,
+    flex: 1,
   },
   provisioningShadow: {
     marginTop: 20,

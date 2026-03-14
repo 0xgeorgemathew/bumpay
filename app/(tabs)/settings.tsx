@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, Pressable } from "react-native";
 import { useRouter } from "expo-router";
 import {
@@ -10,13 +10,14 @@ import { LogoBox } from "../../components/LogoBox";
 import { TokenApprovalsCard } from "../../components/TokenApprovalsCard";
 import { UserCard } from "../../components/UserCard";
 import { WalletSetupCard } from "../../components/WalletSetupCard";
-import { COLORS, BORDER_THICK, BORDER_THIN, SHADOW } from "../../constants/theme";
+import { COLORS, BORDER_THICK, SHADOW } from "../../constants/theme";
 
 type EmailAccount = Extract<LinkedAccount, { type: "email" }>;
 
 export default function SettingsScreen() {
   const router = useRouter();
   const { user, isReady, logout } = usePrivy();
+  const [logoutPressed, setLogoutPressed] = useState(false);
 
   useEffect(() => {
     if (isReady && !user) {
@@ -46,7 +47,7 @@ export default function SettingsScreen() {
   }
 
   const handleLogout = async () => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     await logout();
     router.replace("/login");
   };
@@ -73,12 +74,17 @@ export default function SettingsScreen() {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>MERCHANT APPROVALS</Text>
+          <Text style={styles.sectionTitle}>LIMITS</Text>
           <TokenApprovalsCard />
         </View>
 
         <View style={styles.footer}>
-          <Pressable onPress={handleLogout} style={styles.logoutButton}>
+          <Pressable
+            onPress={handleLogout}
+            onPressIn={() => setLogoutPressed(true)}
+            onPressOut={() => setLogoutPressed(false)}
+            style={[styles.logoutButton, logoutPressed && styles.logoutButtonPressed]}
+          >
             <Text style={styles.logoutText}>LOGOUT</Text>
           </Pressable>
         </View>
@@ -133,9 +139,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   logoutButton: {
+    backgroundColor: COLORS.error,
     paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderWidth: BORDER_THIN.width,
+    paddingVertical: 14,
+    borderWidth: BORDER_THICK.width,
     borderColor: COLORS.border,
     shadowColor: COLORS.border,
     shadowOffset: SHADOW.sm.offset,
@@ -143,11 +150,18 @@ const styles = StyleSheet.create({
     shadowRadius: SHADOW.sm.radius,
     elevation: SHADOW.sm.elevation,
   },
+  logoutButtonPressed: {
+    transform: [
+      { translateX: SHADOW.sm.offset.width },
+      { translateY: SHADOW.sm.offset.height },
+    ],
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 0,
+  },
   logoutText: {
-    fontSize: 12,
-    fontWeight: "800",
-    color: COLORS.textPrimary,
+    fontSize: 14,
+    fontWeight: "900",
+    color: COLORS.textInverted,
     letterSpacing: 2,
-    textDecorationLine: "underline",
   },
 });
