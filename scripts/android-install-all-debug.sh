@@ -7,6 +7,12 @@ ANDROID_DIR="$ROOT_DIR/android"
 APK_PATH="$ANDROID_DIR/app/build/outputs/apk/debug/app-debug.apk"
 APP_ID="com.bump.wallet"
 
+# Expo expects NODE_ENV during bundling. Default debug builds to development.
+export NODE_ENV="${NODE_ENV:-development}"
+
+# Bun can install a balanced-match version that react-native codegen cannot call.
+node "$ROOT_DIR/scripts/ensure-react-native-codegen-deps.mjs"
+
 # Build once
 cd "$ANDROID_DIR"
 echo "Building debug APK..."

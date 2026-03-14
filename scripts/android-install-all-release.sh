@@ -10,6 +10,9 @@ APP_ID="com.bump.wallet"
 # Expo expects NODE_ENV during bundling. Default release builds to production.
 export NODE_ENV="${NODE_ENV:-production}"
 
+# Bun can install a balanced-match version that react-native codegen cannot call.
+node "$ROOT_DIR/scripts/ensure-react-native-codegen-deps.mjs"
+
 # Build once
 cd "$ANDROID_DIR"
 echo "Building release APK..."
