@@ -1,8 +1,9 @@
 /**
  * Blockchain contract configuration for NFC payments
  *
- * All contract addresses and ABIs are sourced from deployedContracts.ts
- * which is auto-generated from the contracts package deployments.
+ * The verifier ABI/address comes from deployedContracts.ts.
+ * Supported payment token addresses are pinned to the Base Sepolia faucet tokens
+ * that the deployed verifier was configured to accept.
  */
 
 import type { Address, Abi } from "viem";
