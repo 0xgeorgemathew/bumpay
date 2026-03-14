@@ -21,6 +21,7 @@ export default function PaymentSuccessScreen() {
   const router = useRouter();
   const { smartWalletAddress } = useOperationalWallet();
   const { addTransaction } = useTransactions();
+  const addedToRecentActivityRef = useRef<string | null>(null);
   const syncedKeyRef = useRef<string | null>(null);
   const [ledgerState, setLedgerState] = useState<{
     status: "idle" | "syncing" | "synced" | "error";
@@ -54,6 +55,62 @@ export default function PaymentSuccessScreen() {
   useEffect(() => {
     playPaymentSuccessSound().catch(console.error);
   }, []);
+
+  useEffect(() => {
+    const activityKey = `${smartWalletAddress ?? "unknown"}:${params.role ?? "unknown"}:${params.txHash ?? "unknown"}`;
+
+    if (
+      !smartWalletAddress ||
+      !params.role ||
+      !params.from ||
+      !params.to ||
+      !params.amount ||
+      !params.tokenSymbol ||
+      !params.chainName ||
+      !params.txHash ||
+      addedToRecentActivityRef.current === activityKey
+    ) {
+      return;
+    }
+
+    addedToRecentActivityRef.current = activityKey;
+
+    const txRole = params.role === "receiver" ? "receiver" : "payer";
+    const txFrom = params.from as `0x${string}`;
+    const txTo = params.to as `0x${string}`;
+    const txAmount = BigInt(params.amount);
+    const txTokenSymbol = params.tokenSymbol;
+    const txChainName = params.chainName;
+    const txTxHash = params.txHash as `0x${string}`;
+    const txFromLabel = params.fromLabel;
+    const txToLabel = params.toLabel;
+
+    addTransaction({
+      role: txRole,
+      from: txFrom,
+      to: txTo,
+      amount: txAmount,
+      tokenSymbol: txTokenSymbol,
+      chainName: txChainName,
+      txHash: txTxHash,
+      fromLabel: txFromLabel,
+      toLabel: txToLabel,
+    }).catch((error) => {
+      console.warn("Failed to add transaction to local history:", error);
+    });
+  }, [
+    addTransaction,
+    params.amount,
+    params.chainName,
+    params.from,
+    params.fromLabel,
+    params.role,
+    params.to,
+    params.toLabel,
+    params.tokenSymbol,
+    params.txHash,
+    smartWalletAddress,
+  ]);
 
   useEffect(() => {
     const syncKey = `${smartWalletAddress ?? "unknown"}:${params.role ?? "unknown"}:${params.txHash ?? "unknown"}`;
@@ -105,21 +162,6 @@ export default function PaymentSuccessScreen() {
         setLedgerState({
           status: "synced",
           message: "Saved to your private Fileverse ledger.",
-        });
-
-        // Also add to local transaction history
-        addTransaction({
-          role: txRole,
-          from: txFrom,
-          to: txTo,
-          amount: txAmount,
-          tokenSymbol: txTokenSymbol,
-          chainName: txChainName,
-          txHash: txTxHash,
-          fromLabel: txFromLabel,
-          toLabel: txToLabel,
-        }).catch((error) => {
-          console.warn("Failed to add transaction to local history:", error);
         });
       })
       .catch((error) => {

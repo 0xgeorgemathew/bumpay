@@ -10,7 +10,7 @@ import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { usePrivy } from "@privy-io/expo";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { formatUnits } from "viem";
+import { formatUnits, type Address } from "viem";
 import { COLORS, BORDER_THICK } from "../constants/theme";
 import { getEnsClaimStatus } from "../lib/ens/service";
 import { useOperationalWallet } from "../lib/wallet";
@@ -30,6 +30,12 @@ import {
   type PaymentAuthorization,
 } from "../lib/blockchain/eip712-signing";
 import { getPaymentTrackingPollingClient } from "../lib/payments/payment-tracking-client";
+import {
+  buildSuccessRouteParams,
+  watchIncomingPayment,
+  type ConfirmedPaymentDetails,
+  type TrackedPaymentIntent,
+} from "../lib/payments/tracking";
 import { buildMerchantAuthorizationMessage } from "../lib/payments/merchant-session";
 
 type PayMerchantState =
@@ -40,6 +46,7 @@ type PayMerchantState =
   | "approving"
   | "signing"
   | "sending"
+  | "watching_chain"
   | "success"
   | "error";
 
@@ -53,6 +60,8 @@ type PayMerchantError =
   | "approval_failed"
   | "signing_failed"
   | "send_failed"
+  | "payment_failed"
+  | "chain_connection_lost"
   | "reader_failed";
 
 function getStatusLabel(state: PayMerchantState, error?: PayMerchantError): string {
@@ -71,11 +80,29 @@ function getStatusLabel(state: PayMerchantState, error?: PayMerchantError): stri
       return "SIGNING";
     case "sending":
       return "SENDING AUTHORIZATION";
+    case "watching_chain":
+      return "CONFIRMING PAYMENT";
     case "success":
       return "PAYMENT AUTHORIZED";
     case "error":
       return `ERROR: ${error?.toUpperCase().replace(/_/g, " ") ?? "UNKNOWN"}`;
   }
+}
+
+function buildMerchantTrackedIntent(
+  request: MerchantPaymentRequest,
+  customerAddress: Address,
+): TrackedPaymentIntent {
+  return {
+    sessionId: request.sessionId,
+    requestId: request.requestId,
+    from: customerAddress,
+    to: request.merchantAddress,
+    amount: request.amount,
+    tokenAddress: request.tokenAddress,
+    chainId: request.chainId,
+    createdAt: Date.now(),
+  };
 }
 
 function NfcIcon({ size = 48, color = "#fff" }: { size?: number; color?: string }) {
@@ -114,6 +141,9 @@ export default function PayMerchantScreen() {
   const [resolvedMerchantEnsName, setResolvedMerchantEnsName] = useState<string | null>(null);
 
   const isProcessingRef = useRef(false);
+  const payerEnsNameRef = useRef<string | null>(null);
+  const resolvedMerchantEnsNameRef = useRef<string | null>(null);
+  const stopWatcherRef = useRef<(() => void) | null>(null);
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -125,6 +155,8 @@ export default function PayMerchantScreen() {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      stopWatcherRef.current?.();
+      stopWatcherRef.current = null;
       NfcReader.stopReader().catch(() => undefined);
       NfcReader.clearScanSession().catch(() => undefined);
     };
@@ -146,7 +178,45 @@ export default function PayMerchantScreen() {
       });
   }, [smartWalletAddress]);
 
+  useEffect(() => {
+    payerEnsNameRef.current = payerEnsName;
+  }, [payerEnsName]);
+
+  useEffect(() => {
+    resolvedMerchantEnsNameRef.current = resolvedMerchantEnsName;
+  }, [resolvedMerchantEnsName]);
+
   const canScan = walletReady && !!smartWalletAddress;
+
+  const stopTracking = useCallback(() => {
+    stopWatcherRef.current?.();
+    stopWatcherRef.current = null;
+  }, []);
+
+  const handleConfirmed = useCallback(
+    async (details: ConfirmedPaymentDetails) => {
+      await refreshBalances().catch(() => undefined);
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      router.replace({
+        pathname: "/payment-success",
+        params: buildSuccessRouteParams(details, "payer", {
+          fromLabel: payerEnsNameRef.current,
+          toLabel: resolvedMerchantEnsNameRef.current,
+        }),
+      });
+    },
+    [refreshBalances, router],
+  );
+
+  const handleWatchFailure = useCallback(
+    async (status: "failed" | "connection_lost", message: string) => {
+      setScreenState("error");
+      setErrorType(status === "connection_lost" ? "chain_connection_lost" : "payment_failed");
+      console.error("Merchant payment watch failed:", message);
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    },
+    [],
+  );
 
   const authorizePayment = useCallback(async (request: MerchantPaymentRequest) => {
     if (!smartWalletAddress || !walletReady) {
@@ -235,8 +305,18 @@ export default function PayMerchantScreen() {
       await NfcReader.clearScanSession();
       await playNfcCompleteSound();
 
-      setScreenState("success");
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      const trackedIntent = buildMerchantTrackedIntent(request, smartWalletAddress);
+      setScreenState("watching_chain");
+
+      stopTracking();
+      stopWatcherRef.current = await watchIncomingPayment(trackedIntent, {
+        onConfirmed: (details) => {
+          handleConfirmed(details).catch(console.error);
+        },
+        onFailed: (status, reason) => {
+          handleWatchFailure(status, reason).catch(console.error);
+        },
+      });
     } catch (err) {
       console.error("Payment authorization failed:", err);
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
@@ -256,6 +336,9 @@ export default function PayMerchantScreen() {
     checkAllowance,
     ensureAllowance,
     signTypedData,
+    handleConfirmed,
+    handleWatchFailure,
+    stopTracking,
   ]);
 
   const handleMerchantRequest = useCallback(
@@ -367,12 +450,13 @@ export default function PayMerchantScreen() {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     await NfcReader.stopReader();
     await NfcReader.clearScanSession();
+    stopTracking();
     setScreenState("idle");
     setErrorType(undefined);
     setMerchantRequest(null);
     setResolvedMerchantEnsName(null);
     setReaderCycle((current) => current + 1);
-  }, []);
+  }, [stopTracking]);
 
   const displayAmount = useMemo(() => {
     if (merchantRequest) {
@@ -419,7 +503,7 @@ export default function PayMerchantScreen() {
                   <NfcIcon size={48} color={COLORS.textInverted} />
                 </View>
                 <Text style={styles.statusText}>TAP TO MERCHANT DEVICE</Text>
-                <Text style={styles.hintText}>Waiting for payment request...</Text>
+                <Text style={styles.helperText}>Waiting for payment request...</Text>
               </View>
             )}
 
@@ -430,7 +514,7 @@ export default function PayMerchantScreen() {
                 <Text style={styles.largeAmount}>
                   {formatUnits(merchantRequest.amount, TOKEN_DECIMALS)} {tokenSymbol}
                 </Text>
-                <Text style={styles.hintText}>Authorizing payment automatically...</Text>
+                <Text style={styles.helperText}>Authorizing payment automatically...</Text>
               </View>
             )}
 
@@ -457,11 +541,21 @@ export default function PayMerchantScreen() {
               </View>
             )}
 
+            {screenState === "watching_chain" && (
+              <View style={styles.loadingContent}>
+                <ActivityIndicator size="large" color={COLORS.textPrimary} />
+                <Text style={styles.statusText}>CONFIRMING PAYMENT...</Text>
+                <Text style={styles.helperText}>
+                  Waiting for {merchantDisplay ?? "merchant"} to claim the payment
+                </Text>
+              </View>
+            )}
+
             {screenState === "success" && (
-              <View style={styles.successContent}>
+              <View style={styles.successContainer}>
                 <Text style={styles.successIcon}>✓</Text>
                 <Text style={styles.statusText}>PAYMENT AUTHORIZED</Text>
-                <Text style={styles.hintText}>
+                <Text style={styles.helperText}>
                   Authorization sent to {merchantDisplay ?? "merchant"}
                 </Text>
               </View>
@@ -518,6 +612,14 @@ export default function PayMerchantScreen() {
             <Pressable onPress={handleCancel} style={styles.footerButton}>
               <Text style={styles.footerButtonText}>CANCEL</Text>
             </Pressable>
+          </View>
+        )}
+
+        {screenState === "watching_chain" && (
+          <View style={styles.footerButtonShadow}>
+            <View style={styles.footerButton}>
+              <Text style={styles.footerButtonText}>WAITING FOR CONFIRMATION</Text>
+            </View>
           </View>
         )}
 
@@ -635,7 +737,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 16,
   },
-  successContent: {
+  successContainer: {
     alignItems: "center",
     gap: 12,
   },
@@ -644,11 +746,10 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     color: COLORS.success,
   },
-  hintText: {
+  helperText: {
     fontSize: 12,
     fontWeight: "700",
     color: COLORS.textMuted,
-    marginTop: 4,
     textAlign: "center",
   },
   errorContent: {

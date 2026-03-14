@@ -4,10 +4,7 @@ import {
   Text,
   StyleSheet,
   Pressable,
-  TextInput,
   ActivityIndicator,
-  KeyboardAvoidingView,
-  Keyboard,
   Linking,
   Platform,
 } from "react-native";
@@ -17,13 +14,16 @@ import { usePrivy } from "@privy-io/expo";
 import { parseUnits, formatUnits, type Hex } from "viem";
 import { COLORS, BORDER_THICK } from "../constants/theme";
 import { useOperationalWallet } from "../lib/wallet";
-import { playNfcCompleteSound } from "../lib/audio/feedback";
+import { playNfcDoneSound, playPaymentSuccessSoundAsync } from "../lib/audio/feedback";
 import { CardEmulation, CardEmulationEvents } from "../lib/nfc/card-emulation";
 import { getEnsClaimStatus } from "../lib/ens/service";
 import {
+  CHAIN_NAME,
   TOKEN_DECIMALS,
   TOKEN_SYMBOL,
+  getTokenSymbolByAddress,
 } from "../lib/blockchain/contracts";
+import { announcePaymentReceivedAsync } from "../lib/audio/announce";
 import {
   buildClaimPaymentTransaction,
   buildMerchantPaymentRequestMessage,
@@ -36,6 +36,7 @@ import {
 } from "../lib/payments/merchant-session";
 import { getPaymentTrackingPollingClient } from "../lib/payments/payment-tracking-client";
 import { buildPaymentExplorerUrl } from "../lib/payments/payment-tracking-types";
+import { useTransactions } from "../lib/transaction-context";
 
 type MerchantScreenState =
   | "enter_amount"
@@ -96,9 +97,17 @@ function getStatusLabel(state: MerchantScreenState, error?: MerchantError): stri
 
 const SHADOW_OFFSET = { width: 8, height: 8 };
 
+const KEYPAD_ROWS = [
+  ["1", "2", "3"],
+  ["4", "5", "6"],
+  ["7", "8", "9"],
+  [".", "0", "backspace"],
+];
+
 export default function MerchantScreen() {
   const router = useRouter();
   const { user, isReady: privyReady } = usePrivy();
+  const { addTransaction } = useTransactions();
   const {
     smartWalletAddress,
     isReady: walletReady,
@@ -107,6 +116,7 @@ export default function MerchantScreen() {
 
   const [screenState, setScreenState] = useState<MerchantScreenState>("enter_amount");
   const [amountInput, setAmountInput] = useState("");
+  const [pressedKey, setPressedKey] = useState<string | null>(null);
   const [errorType, setErrorType] = useState<MerchantError | undefined>();
   const [session, setSession] = useState<MerchantSession | null>(null);
   const [claimTxHash, setClaimTxHash] = useState<Hex | null>(null);
@@ -150,6 +160,45 @@ export default function MerchantScreen() {
       });
   }, [smartWalletAddress]);
 
+  const handleKeyPress = async (key: string) => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+
+    if (key === "backspace") {
+      setAmountInput((prev) => prev.slice(0, -1));
+      return;
+    }
+
+    if (key === ".") {
+      if (amountInput.includes(".")) {
+        return;
+      }
+      if (amountInput === "") {
+        setAmountInput("0.");
+        return;
+      }
+      setAmountInput((prev) => prev + ".");
+      return;
+    }
+
+    if (amountInput.includes(".")) {
+      const decimals = amountInput.split(".")[1] || "";
+      if (decimals.length >= 2) {
+        return;
+      }
+    }
+
+    if (amountInput === "0" && key !== ".") {
+      setAmountInput(key);
+      return;
+    }
+
+    if (amountInput.length >= 10) {
+      return;
+    }
+
+    setAmountInput((prev) => prev + key);
+  };
+
   const handleClaimPayment = useCallback(
     async (activeSession: MerchantSession, parsedAuthorization: ParsedAuthorization) => {
       if (isClaimingPaymentRef.current) {
@@ -173,10 +222,32 @@ export default function MerchantScreen() {
           throw new Error("Claim transaction reverted");
         }
 
+        await addTransaction({
+          role: "receiver",
+          from: parsedAuthorization.customerAddress,
+          to: activeSession.merchantAddress,
+          amount: activeSession.amount,
+          tokenSymbol: getTokenSymbolByAddress(activeSession.tokenAddress),
+          chainName: CHAIN_NAME,
+          txHash,
+          fromLabel: customerEnsName,
+          toLabel: merchantEnsName,
+        }).catch((error) => {
+          console.warn("Failed to add merchant payment to recent activity:", error);
+        });
+
         setClaimTxHash(txHash);
         setScreenState("success");
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        await playNfcCompleteSound();
+
+        // Play loud success sound, wait for completion
+        await playPaymentSuccessSoundAsync();
+
+        // Then voice announcement
+        await announcePaymentReceivedAsync(
+          formatPaymentAmount(activeSession.amount),
+          getTokenSymbolByAddress(activeSession.tokenAddress)
+        );
 
         await CardEmulation.setReady(false);
         await CardEmulation.setMerchantMode(false);
@@ -190,7 +261,7 @@ export default function MerchantScreen() {
         isClaimingPaymentRef.current = false;
       }
     },
-    [sendContractTransaction],
+    [addTransaction, customerEnsName, merchantEnsName, sendContractTransaction],
   );
 
   // Listen for authorization from customer and claim automatically.
@@ -237,7 +308,8 @@ export default function MerchantScreen() {
             setCustomerEnsName(null);
           });
 
-        await playNfcCompleteSound();
+        // "Safe to remove phones" - 2 beeps × 2 times
+        await playNfcDoneSound();
         await CardEmulation.clearPaymentAuthorization();
         await handleClaimPayment(session, parsed);
       } catch (err) {
@@ -271,7 +343,6 @@ export default function MerchantScreen() {
     }
 
     isStartingSessionRef.current = true;
-    Keyboard.dismiss();
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
 
     const newSession = createMerchantSession(
@@ -377,10 +448,7 @@ export default function MerchantScreen() {
   }, [claimExplorerUrl]);
 
   return (
-    <KeyboardAvoidingView
-      style={[styles.container, { backgroundColor }]}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-    >
+    <View style={[styles.container, { backgroundColor }]}>
       <View style={styles.mainContent}>
         {/* Amount Display */}
         <View style={styles.amountBoxShadow}>
@@ -399,22 +467,31 @@ export default function MerchantScreen() {
         <View style={styles.statusCardShadow}>
           <View style={styles.statusCard}>
             {screenState === "enter_amount" ? (
-              <View style={styles.inputContainer}>
-                <TextInput
-                  style={styles.amountInput}
-                  value={amountInput}
-                  onChangeText={setAmountInput}
-                  onEndEditing={() => {
-                    if (parsePaymentAmount(amountInput)) {
-                      handleStartSession().catch(console.error);
-                    }
-                  }}
-                  placeholder="0.00"
-                  placeholderTextColor={COLORS.textMuted}
-                  keyboardType="decimal-pad"
-                  autoFocus
-                />
-                <Text style={styles.inputHint}>Payment request starts automatically</Text>
+              <View style={styles.keypad}>
+                {KEYPAD_ROWS.map((row, rowIndex) => (
+                  <View key={rowIndex} style={styles.keypadRow}>
+                    {row.map((key) => (
+                      <View key={key} style={styles.keyButtonShadow}>
+                        <Pressable
+                          onPress={() => handleKeyPress(key)}
+                          onPressIn={() => setPressedKey(key)}
+                          onPressOut={() => setPressedKey(null)}
+                          style={[
+                            styles.keyButton,
+                            key === "backspace" && styles.backspaceButton,
+                            pressedKey === key && styles.keyPressed,
+                          ]}
+                        >
+                          {key === "backspace" ? (
+                            <Text style={styles.backspaceIcon}>⌫</Text>
+                          ) : (
+                            <Text style={styles.keyText}>{key}</Text>
+                          )}
+                        </Pressable>
+                      </View>
+                    ))}
+                  </View>
+                ))}
               </View>
             ) : (
               <View style={styles.statusContent}>
@@ -526,7 +603,7 @@ export default function MerchantScreen() {
           </>
         )}
       </View>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -591,23 +668,42 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     transform: [{ translateX: -SHADOW_OFFSET.width }, { translateY: -SHADOW_OFFSET.height }],
   },
-  inputContainer: {
+  keypad: {
     width: "100%",
   },
-  amountInput: {
-    fontSize: 36,
+  keypadRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginBottom: 12,
+  },
+  keyButtonShadow: {
+    flex: 1,
+    backgroundColor: COLORS.border,
+  },
+  keyButton: {
+    aspectRatio: 1.5,
+    backgroundColor: COLORS.surface,
+    borderWidth: BORDER_THICK.width,
+    borderColor: COLORS.border,
+    alignItems: "center",
+    justifyContent: "center",
+    transform: [{ translateX: -4 }, { translateY: -4 }],
+  },
+  backspaceButton: {
+    backgroundColor: COLORS.pink400,
+  },
+  keyText: {
+    fontSize: 32,
     fontWeight: "900",
     color: COLORS.textPrimary,
-    textAlign: "center",
-    padding: 0,
   },
-  inputHint: {
-    marginTop: 16,
-    fontSize: 12,
-    fontWeight: "800",
-    textAlign: "center",
-    color: COLORS.textMuted,
-    letterSpacing: 1,
+  backspaceIcon: {
+    fontSize: 32,
+    fontWeight: "900",
+    color: COLORS.textPrimary,
+  },
+  keyPressed: {
+    transform: [{ translateX: 0 }, { translateY: 0 }],
   },
   statusContent: {
     alignItems: "center",
