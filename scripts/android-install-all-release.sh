@@ -16,7 +16,7 @@ node "$ROOT_DIR/scripts/ensure-react-native-codegen-deps.mjs"
 # Build once
 cd "$ANDROID_DIR"
 echo "Building release APK..."
-./gradlew app:assembleRelease -x lint -x test --configure-on-demand --build-cache -PreactNativeArchitectures=arm64-v8a
+./gradlew app:assembleRelease -x lint -x test --configure-on-demand --no-build-cache -PreactNativeArchitectures=arm64-v8a
 
 # Get device list
 DEVICES=$("$ROOT_DIR/scripts/adb-device-list.sh")

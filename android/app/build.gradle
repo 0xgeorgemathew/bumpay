@@ -63,6 +63,22 @@ react {
     autolinkLibrariesWithApp()
 }
 
+def expoEnvFiles = [
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.production.local",
+].collect { new File(projectRoot, it) }.findAll { it.exists() }
+
+tasks.matching { task ->
+    task.name.startsWith("createBundle") && task.name.endsWith("JsAndAssets")
+}.configureEach {
+    if (!expoEnvFiles.isEmpty()) {
+        // Force rebundling when Expo public env files change.
+        inputs.files(expoEnvFiles)
+    }
+}
+
 /**
  * Set this to true in release builds to optimize the app using [R8](https://developer.android.com/topic/performance/app-optimization/enable-app-optimization).
  */
