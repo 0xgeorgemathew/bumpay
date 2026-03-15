@@ -18,15 +18,13 @@ import { COLORS, BORDER_THICK } from "../constants/theme";
 import { useOperationalWallet } from "../lib/wallet";
 import { playNfcDoneSound } from "../lib/audio/feedback";
 import { CardEmulation, CardEmulationEvents } from "../lib/nfc/card-emulation";
-import { getEnsClaimStatus, readEnsProfileByLabel } from "../lib/ens/service";
+import { getEnsClaimStatus, resolveEnsForPayment, validateProfileForPayment } from "../lib/ens/service";
 import {
   CHAIN_NAME,
-  CHAIN_ID,
   TOKEN_DECIMALS,
   TOKEN_ADDRESS,
   TOKEN_SYMBOL,
   getTokenSymbolByAddress,
-  isSupportedPaymentToken,
 } from "../lib/blockchain/contracts";
 import {
   buildClaimPaymentTransaction,
@@ -55,7 +53,15 @@ type MerchantError =
   | "nfc_error"
   | "authorization_invalid"
   | "claim_failed"
-  | "session_expired";
+  | "session_expired"
+  | "merchant_ens_required"
+  | "merchant_profile_invalid";
+
+interface MerchantCheckoutConfig {
+  merchantEnsName: string;
+  merchantAddress: Address;
+  tokenAddress: Address;
+}
 
 function parsePaymentAmount(value: string): bigint | null {
   const cleaned = value.replace(/[^0-9.]/g, "");
@@ -94,6 +100,35 @@ function getStatusLabel(state: MerchantScreenState, error?: MerchantError): stri
     case "error":
       return `ERROR: ${error?.toUpperCase().replace(/_/g, " ") ?? "UNKNOWN"}`;
   }
+}
+
+async function resolveMerchantCheckoutConfig(
+  smartWalletAddress: Address,
+): Promise<MerchantCheckoutConfig> {
+  const status = await getEnsClaimStatus(smartWalletAddress);
+  if (!status.fullName) {
+    throw new Error("merchant_ens_required");
+  }
+
+  const resolved = await resolveEnsForPayment(status.fullName);
+  if (!resolved || resolved.address.toLowerCase() !== smartWalletAddress.toLowerCase()) {
+    throw new Error("merchant_profile_invalid");
+  }
+
+  const validationError = validateProfileForPayment(resolved.profile);
+  if (
+    validationError ||
+    !resolved.profile.defaultAsset ||
+    resolved.profile.defaultAsset.token === "NATIVE"
+  ) {
+    throw new Error("merchant_profile_invalid");
+  }
+
+  return {
+    merchantEnsName: resolved.ensName,
+    merchantAddress: resolved.address,
+    tokenAddress: resolved.profile.defaultAsset.token,
+  };
 }
 
 const SHADOW_OFFSET = { width: 8, height: 8 };
@@ -244,59 +279,17 @@ export default function MerchantScreen() {
       return;
     }
 
-    getEnsClaimStatus(smartWalletAddress)
-      .then((status) => {
-        setMerchantEnsName(status.fullName);
+    resolveMerchantCheckoutConfig(smartWalletAddress)
+      .then((config) => {
+        setMerchantEnsName(config.merchantEnsName);
+        setMerchantSettlementToken(config.tokenAddress);
       })
       .catch((error) => {
         console.warn("Failed to load merchant ENS:", error);
         setMerchantEnsName(null);
-      });
-  }, [smartWalletAddress]);
-
-  const resolveMerchantSettlementToken = useCallback(async (): Promise<Address> => {
-    if (!smartWalletAddress) {
-      return TOKEN_ADDRESS;
-    }
-
-    try {
-      const status = await getEnsClaimStatus(smartWalletAddress);
-      if (!status.label) {
-        return TOKEN_ADDRESS;
-      }
-
-      const profile = await readEnsProfileByLabel(status.label);
-      const preferredAsset = profile?.defaultAsset;
-
-      if (
-        preferredAsset &&
-        preferredAsset.chainId === CHAIN_ID &&
-        preferredAsset.token !== "NATIVE" &&
-        isSupportedPaymentToken(preferredAsset.token)
-      ) {
-        return preferredAsset.token;
-      }
-    } catch (error) {
-      console.warn("Failed to resolve merchant settlement token:", error);
-    }
-
-    return TOKEN_ADDRESS;
-  }, [smartWalletAddress]);
-
-  useEffect(() => {
-    if (!smartWalletAddress) {
-      return;
-    }
-
-    resolveMerchantSettlementToken()
-      .then((tokenAddress) => {
-        setMerchantSettlementToken(tokenAddress);
-      })
-      .catch((error) => {
-        console.warn("Failed to preload merchant settlement token:", error);
         setMerchantSettlementToken(TOKEN_ADDRESS);
       });
-  }, [resolveMerchantSettlementToken, smartWalletAddress]);
+  }, [smartWalletAddress]);
 
   const handleKeyPress = async (key: string) => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
@@ -502,15 +495,29 @@ export default function MerchantScreen() {
     isStartingSessionRef.current = true;
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
 
-    const settlementToken = await resolveMerchantSettlementToken();
-    setMerchantSettlementToken(settlementToken);
+    let merchantConfig: MerchantCheckoutConfig;
+    try {
+      merchantConfig = await resolveMerchantCheckoutConfig(smartWalletAddress);
+    } catch (error) {
+      console.warn("Failed to resolve merchant checkout config:", error);
+      setErrorType(
+        error instanceof Error && error.message === "merchant_ens_required"
+          ? "merchant_ens_required"
+          : "merchant_profile_invalid",
+      );
+      setScreenState("error");
+      isStartingSessionRef.current = false;
+      return;
+    }
+
+    setMerchantEnsName(merchantConfig.merchantEnsName);
+    setMerchantSettlementToken(merchantConfig.tokenAddress);
 
     const newSession = createMerchantSession(
-      smartWalletAddress,
+      merchantConfig.merchantAddress,
+      merchantConfig.merchantEnsName,
       amount,
-      settlementToken,
-      undefined,
-      merchantEnsName ?? undefined,
+      merchantConfig.tokenAddress,
     );
 
     try {
@@ -538,8 +545,6 @@ export default function MerchantScreen() {
     }
   }, [
     amountInput,
-    merchantEnsName,
-    resolveMerchantSettlementToken,
     screenState,
     smartWalletAddress,
     walletReady,
