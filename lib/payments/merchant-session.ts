@@ -27,6 +27,7 @@ export interface MerchantSession {
   sessionId: string;
   requestId: string;
   merchantAddress: Address;
+  merchantEnsName: string;
   amount: bigint;
   tokenAddress: Address;
   chainId: number;
@@ -34,13 +35,14 @@ export interface MerchantSession {
   deadline: number;
   nonce: bigint;
   createdAt: number;
-  merchantName?: string;
 }
 
 export interface ParsedAuthorization {
   sessionId: string;
   requestId: string;
   customerAddress: Address;
+  resolvedMerchantAddress: Address;
+  resolvedTokenAddress: Address;
   signature: Hex;
 }
 
@@ -56,10 +58,10 @@ export function generateMerchantRequestId(): string {
  */
 export function createMerchantSession(
   merchantAddress: Address,
+  merchantEnsName: string,
   amount: bigint,
   tokenAddress: Address,
   deadlineSeconds: number = 300,
-  merchantName?: string,
 ): MerchantSession {
   const requestId = generateMerchantRequestId();
   const sessionId = requestId;
@@ -69,6 +71,7 @@ export function createMerchantSession(
     sessionId,
     requestId,
     merchantAddress,
+    merchantEnsName,
     amount,
     tokenAddress,
     chainId: CHAIN_ID,
@@ -76,7 +79,6 @@ export function createMerchantSession(
     deadline: Math.floor(Date.now() / 1000) + deadlineSeconds,
     nonce,
     createdAt: Date.now(),
-    merchantName,
   };
 }
 
@@ -91,43 +93,15 @@ export function buildMerchantPaymentRequestMessage(
     sessionId: session.sessionId,
     kind: "MERCHANT_PAYMENT_REQUEST",
     requestId: session.requestId,
-    merchantAddress: session.merchantAddress,
+    merchantEnsName: session.merchantEnsName,
     amount: session.amount.toString(),
-    tokenAddress: session.tokenAddress,
     chainId: session.chainId,
     verifyingContract: session.verifyingContract,
     deadline: session.deadline,
     nonce: session.nonce.toString(),
-    merchantName: session.merchantName,
   };
 
   return serializeProtocolMessage(message);
-}
-
-/**
- * Parse a merchant payment request from NFC payload
- */
-export function parseMerchantPaymentRequest(
-  payload: string,
-): MerchantSession | null {
-  const message = parseProtocolMessage(payload);
-  if (!message || message.kind !== "MERCHANT_PAYMENT_REQUEST") {
-    return null;
-  }
-
-  return {
-    sessionId: message.sessionId,
-    requestId: message.requestId,
-    merchantAddress: message.merchantAddress,
-    amount: BigInt(message.amount),
-    tokenAddress: message.tokenAddress,
-    chainId: message.chainId,
-    verifyingContract: message.verifyingContract,
-    deadline: message.deadline,
-    nonce: BigInt(message.nonce),
-    createdAt: Date.now(),
-    merchantName: message.merchantName,
-  };
 }
 
 /**
@@ -154,6 +128,8 @@ export function buildMerchantAuthorizationMessage(
   sessionId: string,
   requestId: string,
   customerAddress: Address,
+  resolvedMerchantAddress: Address,
+  resolvedTokenAddress: Address,
   signature: Hex,
 ): string {
   const message: MerchantPaymentAuthorizationMessage = {
@@ -162,6 +138,8 @@ export function buildMerchantAuthorizationMessage(
     kind: "MERCHANT_PAYMENT_AUTHORIZATION",
     requestId,
     customerAddress,
+    resolvedMerchantAddress,
+    resolvedTokenAddress,
     signature,
   };
 
@@ -183,6 +161,8 @@ export function parseMerchantAuthorization(
     sessionId: message.sessionId,
     requestId: message.requestId,
     customerAddress: message.customerAddress,
+    resolvedMerchantAddress: message.resolvedMerchantAddress,
+    resolvedTokenAddress: message.resolvedTokenAddress,
     signature: message.signature,
   };
 }
@@ -199,7 +179,9 @@ export function matchesMerchantSession(
 ): boolean {
   return (
     authorization.sessionId === session.sessionId &&
-    authorization.requestId === session.requestId
+    authorization.requestId === session.requestId &&
+    authorization.resolvedMerchantAddress.toLowerCase() === session.merchantAddress.toLowerCase() &&
+    authorization.resolvedTokenAddress.toLowerCase() === session.tokenAddress.toLowerCase()
   );
 }
 

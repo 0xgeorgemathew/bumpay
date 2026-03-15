@@ -76,12 +76,10 @@ export type PaymentIntentMessage = ProtocolEnvelope & {
 export type MerchantPaymentRequestMessage = ProtocolEnvelope & {
   kind: "MERCHANT_PAYMENT_REQUEST";
   requestId: string;
-  /** Merchant's wallet address (receives payment) */
-  merchantAddress: Address;
+  /** Merchant ENS name used as the source of truth for routing */
+  merchantEnsName: string;
   /** Payment amount in token smallest unit */
   amount: string;
-  /** Token contract address */
-  tokenAddress: Address;
   /** Chain ID for the payment */
   chainId: number;
   /** Verifier contract that will validate and claim the payment */
@@ -90,8 +88,6 @@ export type MerchantPaymentRequestMessage = ProtocolEnvelope & {
   deadline: number;
   /** Unique nonce for this authorization */
   nonce: string;
-  /** Optional merchant display name */
-  merchantName?: string;
 };
 
 /**
@@ -121,6 +117,10 @@ export type MerchantPaymentAuthorizationMessage = ProtocolEnvelope & {
   requestId: string;
   /** Customer's wallet address (smart wallet) */
   customerAddress: Address;
+  /** Merchant address resolved from ENS by the payer */
+  resolvedMerchantAddress: Address;
+  /** Settlement token resolved from ENS by the payer */
+  resolvedTokenAddress: Address;
   /** EIP-712 signature for claimPayment() */
   signature: Hex;
 };
@@ -335,9 +335,8 @@ export function parseProtocolMessage(data: string): ProtocolMessage | null {
 
     if (kind === "MERCHANT_PAYMENT_REQUEST") {
       const requestId = readString(parsed, "requestId");
-      const merchantAddress = readString(parsed, "merchantAddress");
+      const merchantEnsName = readString(parsed, "merchantEnsName");
       const amount = readString(parsed, "amount");
-      const tokenAddress = readString(parsed, "tokenAddress");
       const chainId = readNumber(parsed, "chainId");
       const verifyingContract = readString(parsed, "verifyingContract");
       const deadline = readNumber(parsed, "deadline");
@@ -345,9 +344,8 @@ export function parseProtocolMessage(data: string): ProtocolMessage | null {
 
       if (
         !requestId ||
-        !merchantAddress ||
+        !merchantEnsName ||
         !amount ||
-        !tokenAddress ||
         chainId === null ||
         !verifyingContract ||
         deadline === null ||
@@ -361,14 +359,12 @@ export function parseProtocolMessage(data: string): ProtocolMessage | null {
         sessionId,
         kind,
         requestId,
-        merchantAddress: merchantAddress as Address,
+        merchantEnsName,
         amount,
-        tokenAddress: tokenAddress as Address,
         chainId,
         verifyingContract: verifyingContract as Address,
         deadline,
         nonce,
-        merchantName: readOptionalString(parsed, "merchantName"),
       };
     }
 
@@ -415,9 +411,11 @@ export function parseProtocolMessage(data: string): ProtocolMessage | null {
     if (kind === "MERCHANT_PAYMENT_AUTHORIZATION") {
       const requestId = readString(parsed, "requestId");
       const customerAddress = readString(parsed, "customerAddress");
+      const resolvedMerchantAddress = readString(parsed, "resolvedMerchantAddress");
+      const resolvedTokenAddress = readString(parsed, "resolvedTokenAddress");
       const signature = readString(parsed, "signature");
 
-      if (!requestId || !customerAddress || !signature) {
+      if (!requestId || !customerAddress || !resolvedMerchantAddress || !resolvedTokenAddress || !signature) {
         return null;
       }
 
@@ -427,6 +425,8 @@ export function parseProtocolMessage(data: string): ProtocolMessage | null {
         kind,
         requestId,
         customerAddress: customerAddress as Address,
+        resolvedMerchantAddress: resolvedMerchantAddress as Address,
+        resolvedTokenAddress: resolvedTokenAddress as Address,
         signature: signature as Hex,
       };
     }

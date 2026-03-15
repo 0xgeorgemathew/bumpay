@@ -47,14 +47,12 @@ function assertReaderMethod(methodName: string) {
 export interface MerchantPaymentRequest {
   sessionId: string;
   requestId: string;
-  merchantAddress: Address;
+  merchantEnsName: string;
   amount: bigint;
-  tokenAddress: Address;
   chainId: number;
   verifyingContract: Address;
   deadline: number;
   nonce: bigint;
-  merchantName?: string;
 }
 
 export interface MerchantBitGoPaymentRequest {
@@ -119,14 +117,12 @@ function parseMerchantPaymentRequest(payload: string): MerchantPaymentRequest | 
   return {
     sessionId: message.sessionId,
     requestId: message.requestId,
-    merchantAddress: message.merchantAddress,
+    merchantEnsName: message.merchantEnsName,
     amount: BigInt(message.amount),
-    tokenAddress: message.tokenAddress,
     chainId: message.chainId,
     verifyingContract: message.verifyingContract,
     deadline: message.deadline,
     nonce: BigInt(message.nonce),
-    merchantName: message.merchantName,
   };
 }
 
