@@ -7,7 +7,7 @@ RUN npm ci
 
 COPY tsconfig.json ./
 COPY src ./src
-COPY data ./data
+RUN mkdir -p ./data
 
 RUN npm run build
 
