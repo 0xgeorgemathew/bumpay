@@ -158,7 +158,7 @@ export function NeoSlider({
         damping: 20,
         stiffness: 240,
         mass: 0.8,
-        useNativeDriver: true,
+        useNativeDriver: false,
       }).start();
     }
   }, [animatedX, isDragging, max, min, value, valueToX]);
@@ -207,7 +207,7 @@ export function NeoSlider({
             damping: 20,
             stiffness: 240,
             mass: 0.8,
-            useNativeDriver: true,
+            useNativeDriver: false,
           }).start();
 
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => undefined);
@@ -222,7 +222,7 @@ export function NeoSlider({
             damping: 20,
             stiffness: 240,
             mass: 0.8,
-            useNativeDriver: true,
+            useNativeDriver: false,
           }).start();
         },
       }),
