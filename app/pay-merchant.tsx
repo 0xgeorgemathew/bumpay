@@ -14,13 +14,12 @@ import { usePrivy } from "@privy-io/expo";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { formatUnits, type Address } from "viem";
 import { COLORS, BORDER_THICK } from "../constants/theme";
-import { getEnsClaimStatus } from "../lib/ens/service";
+import { getEnsClaimStatus, resolveEnsForPayment, validateProfileForPayment } from "../lib/ens/service";
 import { useOperationalWallet } from "../lib/wallet";
 import { playNfcCompleteSound } from "../lib/audio/feedback";
 import { NfcReader, NfcReaderEvents, type MerchantPaymentRequest } from "../lib/nfc/reader";
 import {
   CHAIN_ID,
-  TOKEN_ADDRESS,
   TOKEN_DECIMALS,
   USDT_ADDRESS,
   VERIFIER_ADDRESS,
@@ -63,7 +62,15 @@ type PayMerchantError =
   | "send_failed"
   | "payment_failed"
   | "chain_connection_lost"
-  | "reader_failed";
+  | "reader_failed"
+  | "merchant_resolution_failed"
+  | "merchant_profile_invalid";
+
+interface ResolvedMerchantRequest {
+  merchantEnsName: string;
+  merchantAddress: Address;
+  tokenAddress: Address;
+}
 
 function getStatusLabel(state: PayMerchantState, error?: PayMerchantError): string {
   switch (state) {
@@ -90,15 +97,16 @@ function getStatusLabel(state: PayMerchantState, error?: PayMerchantError): stri
 
 function buildMerchantTrackedIntent(
   request: MerchantPaymentRequest,
+  resolvedMerchant: ResolvedMerchantRequest,
   customerAddress: Address,
 ): TrackedPaymentIntent {
   return {
     sessionId: request.sessionId,
     requestId: request.requestId,
     from: customerAddress,
-    to: request.merchantAddress,
+    to: resolvedMerchant.merchantAddress,
     amount: request.amount,
-    tokenAddress: request.tokenAddress,
+    tokenAddress: resolvedMerchant.tokenAddress,
     chainId: request.chainId,
     createdAt: Date.now(),
   };
@@ -199,6 +207,40 @@ function shortAddress(address?: string | null): string {
 
 const SHADOW_OFFSET = { width: 8, height: 8 };
 
+function isTransientMerchantDiscoveryError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("receiver is not ready") ||
+    normalized.includes("no payment request available") ||
+    normalized.includes("no active session")
+  );
+}
+
+async function resolveMerchantRequestFromEns(
+  merchantEnsName: string,
+): Promise<ResolvedMerchantRequest> {
+  const resolved = await resolveEnsForPayment(merchantEnsName);
+  if (!resolved) {
+    throw new Error("merchant_resolution_failed");
+  }
+
+  const validationError = validateProfileForPayment(resolved.profile);
+  if (
+    validationError ||
+    !resolved.profile.defaultAsset ||
+    resolved.profile.defaultAsset.token === "NATIVE" ||
+    !isSupportedPaymentToken(resolved.profile.defaultAsset.token)
+  ) {
+    throw new Error("merchant_profile_invalid");
+  }
+
+  return {
+    merchantEnsName: resolved.ensName,
+    merchantAddress: resolved.address,
+    tokenAddress: resolved.profile.defaultAsset.token,
+  };
+}
+
 export default function PayMerchantScreen() {
   const router = useRouter();
   const { user, isReady: privyReady } = usePrivy();
@@ -216,6 +258,7 @@ export default function PayMerchantScreen() {
   const [screenState, setScreenState] = useState<PayMerchantState>("idle");
   const [errorType, setErrorType] = useState<PayMerchantError | undefined>();
   const [merchantRequest, setMerchantRequest] = useState<MerchantPaymentRequest | null>(null);
+  const [resolvedMerchant, setResolvedMerchant] = useState<ResolvedMerchantRequest | null>(null);
   const [readerCycle, setReaderCycle] = useState(0);
   const [payerEnsName, setPayerEnsName] = useState<string | null>(null);
   const [resolvedMerchantEnsName, setResolvedMerchantEnsName] = useState<string | null>(null);
@@ -298,7 +341,10 @@ export default function PayMerchantScreen() {
     [],
   );
 
-  const authorizePayment = useCallback(async (request: MerchantPaymentRequest) => {
+  const authorizePayment = useCallback(async (
+    request: MerchantPaymentRequest,
+    resolvedMerchantRequest: ResolvedMerchantRequest,
+  ) => {
     if (!smartWalletAddress || !walletReady) {
       return;
     }
@@ -306,11 +352,9 @@ export default function PayMerchantScreen() {
     try {
       const balances = await refreshBalances();
       const availableBalance =
-        request.tokenAddress.toLowerCase() === TOKEN_ADDRESS.toLowerCase()
-          ? balances?.usdcBalance
-          : request.tokenAddress.toLowerCase() === USDT_ADDRESS.toLowerCase()
-            ? balances?.usdtBalance
-            : null;
+        resolvedMerchantRequest.tokenAddress.toLowerCase() === USDT_ADDRESS.toLowerCase()
+          ? balances?.usdtBalance
+          : balances?.usdcBalance;
 
       if (availableBalance == null || availableBalance < request.amount) {
         setScreenState("error");
@@ -324,7 +368,7 @@ export default function PayMerchantScreen() {
 
       // The verifier contract needs approval to transfer tokens
       const allowance = await checkAllowance(
-        request.tokenAddress,
+        resolvedMerchantRequest.tokenAddress,
         smartWalletAddress,
         VERIFIER_ADDRESS,
       );
@@ -332,7 +376,7 @@ export default function PayMerchantScreen() {
       if (allowance < request.amount) {
         setScreenState("approving");
         const approveTx = await ensureAllowance(
-          request.tokenAddress,
+          resolvedMerchantRequest.tokenAddress,
           VERIFIER_ADDRESS,
           request.amount,
         );
@@ -360,8 +404,8 @@ export default function PayMerchantScreen() {
       setScreenState("signing");
 
       const authorization: PaymentAuthorization = {
-        token: request.tokenAddress,
-        merchant: request.merchantAddress,
+        token: resolvedMerchantRequest.tokenAddress,
+        merchant: resolvedMerchantRequest.merchantAddress,
         customer: smartWalletAddress,
         amount: request.amount,
         nonce: request.nonce,
@@ -377,6 +421,8 @@ export default function PayMerchantScreen() {
         request.sessionId,
         request.requestId,
         smartWalletAddress,
+        resolvedMerchantRequest.merchantAddress,
+        resolvedMerchantRequest.tokenAddress,
         sig,
       );
 
@@ -385,7 +431,11 @@ export default function PayMerchantScreen() {
       await NfcReader.clearScanSession();
       await playNfcCompleteSound();
 
-      const trackedIntent = buildMerchantTrackedIntent(request, smartWalletAddress);
+      const trackedIntent = buildMerchantTrackedIntent(
+        request,
+        resolvedMerchantRequest,
+        smartWalletAddress,
+      );
       setScreenState("watching_chain");
 
       stopTracking();
@@ -444,13 +494,6 @@ export default function PayMerchantScreen() {
           return;
         }
 
-        if (!isSupportedPaymentToken(request.tokenAddress)) {
-          setScreenState("error");
-          setErrorType("unsupported_token");
-          await NfcReader.stopReader();
-          return;
-        }
-
         const now = Math.floor(Date.now() / 1000);
         if (request.deadline <= now) {
           setScreenState("error");
@@ -459,21 +502,27 @@ export default function PayMerchantScreen() {
           return;
         }
 
+        let resolvedMerchantRequest: ResolvedMerchantRequest;
+        try {
+          resolvedMerchantRequest = await resolveMerchantRequestFromEns(request.merchantEnsName);
+        } catch (error) {
+          console.error("Failed to resolve merchant ENS request:", error);
+          setScreenState("error");
+          setErrorType(
+            error instanceof Error && error.message === "merchant_profile_invalid"
+              ? "merchant_profile_invalid"
+              : "merchant_resolution_failed",
+          );
+          await NfcReader.stopReader();
+          return;
+        }
+
         setMerchantRequest(request);
-        setResolvedMerchantEnsName(request.merchantName ?? null);
+        setResolvedMerchant(resolvedMerchantRequest);
+        setResolvedMerchantEnsName(resolvedMerchantRequest.merchantEnsName);
         setScreenState("request_received");
         await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        if (!request.merchantName) {
-          getEnsClaimStatus(request.merchantAddress)
-            .then((status) => {
-              setResolvedMerchantEnsName(status.fullName);
-            })
-            .catch((error) => {
-              console.warn("Failed to load merchant ENS:", error);
-              setResolvedMerchantEnsName(null);
-            });
-        }
-        await authorizePayment(request);
+        await authorizePayment(request, resolvedMerchantRequest);
       } finally {
         isProcessingRef.current = false;
       }
@@ -492,6 +541,7 @@ export default function PayMerchantScreen() {
     setScreenState("scanning");
     setErrorType(undefined);
     setMerchantRequest(null);
+    setResolvedMerchant(null);
     setResolvedMerchantEnsName(null);
 
     NfcReader.clearScanSession()
@@ -508,6 +558,13 @@ export default function PayMerchantScreen() {
     });
 
     const errorSubscription = NfcReaderEvents.onError((message) => {
+      if (isTransientMerchantDiscoveryError(message)) {
+        console.warn("Reader waiting for merchant request:", message);
+        setScreenState("scanning");
+        setErrorType(undefined);
+        return;
+      }
+
       console.error("Reader error:", message);
       setScreenState("error");
       setErrorType("reader_failed");
@@ -534,6 +591,7 @@ export default function PayMerchantScreen() {
     setScreenState("idle");
     setErrorType(undefined);
     setMerchantRequest(null);
+    setResolvedMerchant(null);
     setResolvedMerchantEnsName(null);
     setReaderCycle((current) => current + 1);
   }, [stopTracking]);
@@ -546,15 +604,15 @@ export default function PayMerchantScreen() {
   }, [merchantRequest]);
 
   const tokenSymbol = useMemo(() => {
-    return getTokenSymbolByAddress(merchantRequest?.tokenAddress, "TOKEN");
-  }, [merchantRequest]);
+    return getTokenSymbolByAddress(resolvedMerchant?.tokenAddress, "TOKEN");
+  }, [resolvedMerchant]);
 
   const merchantDisplay = useMemo(() => {
     if (!merchantRequest) return null;
-    const name = resolvedMerchantEnsName ?? merchantRequest.merchantName;
-    const address = merchantRequest.merchantAddress;
-    return name || `${address.slice(0, 6)}...${address.slice(-4)}`;
-  }, [merchantRequest, resolvedMerchantEnsName]);
+    const name = resolvedMerchantEnsName ?? merchantRequest.merchantEnsName;
+    const address = resolvedMerchant?.merchantAddress;
+    return name || (address ? `${address.slice(0, 6)}...${address.slice(-4)}` : "MERCHANT");
+  }, [merchantRequest, resolvedMerchant, resolvedMerchantEnsName]);
 
   const backgroundColor = COLORS.primaryBlue;
 
