@@ -100,6 +100,14 @@ Fill in the values below:
 | `EXPO_PUBLIC_FILEVERSE_API_KEY` | Optional | Fileverse API key |
 | `EXPO_PUBLIC_BITGO_API_URL` | Optional | BitGo merchant API base URL |
 
+If you deploy the BitGo backend to Railway, use the generated public service URL directly, for example:
+
+```bash
+EXPO_PUBLIC_BITGO_API_URL=https://your-bitgo-api.up.railway.app
+```
+
+Do not append `/api/bitgo` here. The app adds the API path itself.
+
 ### Run
 
 ```bash
