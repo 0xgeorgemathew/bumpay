@@ -18,8 +18,23 @@ export interface MerchantRecord {
   merchantName?: string;
   bitgoWalletId: string;
   bitgoBaseAddress?: Address;
+  baselineConfirmedBalance?: string;
+  baselineSpendableBalance?: string;
   coin: string;
   label: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface VerifiedTransferRecord {
+  transferId: string;
+  merchantId: string;
+  walletId: string;
+  receiveAddress: Address;
+  tokenName?: string;
+  amount: string;
+  txHash?: Hex;
+  state?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -55,14 +70,41 @@ export interface CheckoutRecord {
   updatedAt: string;
 }
 
+export type WithdrawalRequestAppStatus =
+  | "submitted"
+  | "awaiting_signature"
+  | "broadcasted"
+  | "confirmed"
+  | "failed";
+
+export interface WithdrawalRequestRecord {
+  txRequestId: string;
+  merchantId: string;
+  walletId: string;
+  destinationAddress: Address;
+  amount: string;
+  tokenName: string;
+  status: string;
+  appStatus: WithdrawalRequestAppStatus;
+  txHash?: Hex;
+  pendingApprovalId?: string;
+  errorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface StoreData {
   merchants: Record<string, MerchantRecord>;
   checkouts: Record<string, CheckoutRecord>;
+  verifiedTransfers: Record<string, VerifiedTransferRecord>;
+  withdrawalRequests: Record<string, WithdrawalRequestRecord>;
 }
 
 const EMPTY_STORE: StoreData = {
   merchants: {},
   checkouts: {},
+  verifiedTransfers: {},
+  withdrawalRequests: {},
 };
 
 export class JsonStore {
@@ -96,6 +138,8 @@ export class JsonStore {
       return {
         merchants: parsed.merchants ?? {},
         checkouts: parsed.checkouts ?? {},
+        verifiedTransfers: parsed.verifiedTransfers ?? {},
+        withdrawalRequests: parsed.withdrawalRequests ?? {},
       };
     } catch {
       return EMPTY_STORE;

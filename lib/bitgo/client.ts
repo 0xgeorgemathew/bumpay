@@ -35,8 +35,10 @@ export interface MerchantBitGoCheckout {
 }
 
 export interface MerchantBitGoWithdrawalResult {
+  txRequestId?: string;
   txid?: string;
   status?: string;
+  appStatus?: "submitted" | "awaiting_signature" | "broadcasted" | "confirmed" | "failed";
   transfer?: {
     id?: string;
     coin?: string;
@@ -49,6 +51,15 @@ export interface MerchantBitGoWithdrawalResult {
   };
 }
 
+export interface MerchantBitGoConsolidationResult {
+  txid?: string;
+  txHash?: string;
+  hash?: string;
+  success?: boolean;
+  status?: string;
+  result?: string;
+}
+
 export interface MerchantBitGoSummary {
   merchantId: string;
   merchantAddress: Address;
@@ -56,13 +67,14 @@ export interface MerchantBitGoSummary {
   walletAddress?: Address;
   tokenSymbol: string;
   tokenAddress: Address;
-  totalReceived: string;
-  unclaimedAmount: string;
-  claimedAmount: string;
-  pendingAmount: string;
+  merchantBaselineBalance: string;
+  receivedViaCheckouts: string;
+  confirmedBalance: string;
+  spendableBalance: string;
+  needsConsolidation: boolean;
+  checkoutReceiptsAvailable: string;
   checkoutCount: number;
-  settledCheckoutCount: number;
-  unclaimedCheckoutCount: number;
+  receiveAddressCount: number;
 }
 
 interface ApiEnvelope<T> {
@@ -157,6 +169,32 @@ export async function withdrawMerchantBitGoFunds(params: {
   amount: string;
 }): Promise<MerchantBitGoWithdrawalResult> {
   return request<MerchantBitGoWithdrawalResult>("/api/bitgo/merchant/withdrawals", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(params),
+  });
+}
+
+export async function getMerchantBitGoWithdrawalStatus(params: {
+  merchantAddress: Address;
+  txRequestId?: string;
+}): Promise<MerchantBitGoWithdrawalResult | null> {
+  const search = new URLSearchParams({ merchantAddress: params.merchantAddress });
+  if (params.txRequestId) {
+    search.set("txRequestId", params.txRequestId);
+  }
+
+  return request<MerchantBitGoWithdrawalResult | null>(
+    `/api/bitgo/merchant/withdrawals/status?${search.toString()}`,
+  );
+}
+
+export async function consolidateMerchantBitGoFunds(params: {
+  merchantAddress: Address;
+}): Promise<MerchantBitGoConsolidationResult> {
+  return request<MerchantBitGoConsolidationResult>("/api/bitgo/merchant/consolidate", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

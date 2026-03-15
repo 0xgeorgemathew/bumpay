@@ -28,6 +28,11 @@ const withdrawSchema = z.object({
   amount: z.string().regex(/^\d+$/),
 });
 
+const withdrawalStatusSchema = z.object({
+  merchantAddress: addressSchema,
+  txRequestId: z.string().uuid().optional(),
+});
+
 export function createMerchantRouter(service: BitGoMerchantService) {
   const router = Router();
 
@@ -139,6 +144,47 @@ export function createMerchantRouter(service: BitGoMerchantService) {
       res.status(400).json({
         success: false,
         error: error instanceof Error ? error.message : "Failed to withdraw merchant funds",
+      });
+    }
+  });
+
+  router.get("/withdrawals/status", async (req, res) => {
+    try {
+      const parsed = withdrawalStatusSchema.parse(req.query);
+      const result = await service.getWithdrawalStatus({
+        merchantAddress: parsed.merchantAddress as `0x${string}`,
+        txRequestId: parsed.txRequestId,
+      });
+
+      res.json({
+        success: true,
+        data: result,
+        message: "Merchant withdrawal status loaded",
+      });
+    } catch (error) {
+      res.status(400).json({
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to load withdrawal status",
+      });
+    }
+  });
+
+  router.post("/consolidate", async (req, res) => {
+    try {
+      const parsed = merchantWalletSchema.parse(req.body);
+      const result = await service.consolidateMerchantFunds({
+        merchantAddress: parsed.merchantAddress as `0x${string}`,
+      });
+
+      res.json({
+        success: true,
+        data: result,
+        message: "BitGo consolidation submitted",
+      });
+    } catch (error) {
+      res.status(400).json({
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to consolidate merchant funds",
       });
     }
   });

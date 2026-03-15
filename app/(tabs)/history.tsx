@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, Pressable, ScrollView } from "react-native";
 import { useRouter } from "expo-router";
 import { usePrivy } from "@privy-io/expo";
 import * as Haptics from "expo-haptics";
+import * as Clipboard from "expo-clipboard";
 import { Ionicons } from "@expo/vector-icons";
 import { formatUnits } from "viem";
 import { HomeHeader } from "../../components/HomeHeader";
 import { COLORS, BORDER_THICK } from "../../constants/theme";
 import { BITGO_MERCHANT_TOKEN, TOKEN_DECIMALS } from "../../lib/blockchain/contracts";
 import {
+  getMerchantBitGoWithdrawalStatus,
   getMerchantBitGoSummary,
   type MerchantBitGoSummary,
   type MerchantBitGoWithdrawalResult,
@@ -21,11 +23,23 @@ export default function HistoryScreen() {
   const { user, isReady } = usePrivy();
   const { smartWalletAddress, isReady: walletReady, readTokenBalance } = useOperationalWallet();
   const [summary, setSummary] = useState<MerchantBitGoSummary | null>(null);
-  const [merchantTokenBalance, setMerchantTokenBalance] = useState<bigint>(BigInt(0));
+  const [merchantWalletBalance, setMerchantWalletBalance] = useState<bigint>(BigInt(0));
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [isWithdrawing, setIsWithdrawing] = useState(false);
   const [withdrawResult, setWithdrawResult] = useState<MerchantBitGoWithdrawalResult | null>(null);
+  const [copiedWallet, setCopiedWallet] = useState(false);
+  const [copiedBaseAddress, setCopiedBaseAddress] = useState(false);
+  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollingTxRequestIdRef = useRef<string | null>(null);
+
+  const withdrawableAmount = BigInt(summary?.checkoutReceiptsAvailable ?? "0");
+  const bitgoBalance = BigInt(summary?.confirmedBalance ?? "0");
+  const hasPendingWithdrawal =
+    withdrawResult?.appStatus === "submitted" ||
+    withdrawResult?.appStatus === "awaiting_signature" ||
+    withdrawResult?.appStatus === "broadcasted";
 
   useEffect(() => {
     if (isReady && !user) {
@@ -36,24 +50,28 @@ export default function HistoryScreen() {
   const loadSummary = useCallback(async () => {
     if (!walletReady || !smartWalletAddress) {
       setSummary(null);
-      setError(null);
+      setLoadError(null);
       return;
     }
 
     setIsLoading(true);
-    setError(null);
+    setLoadError(null);
 
     try {
-      const [nextSummary, nextBalance] = await Promise.all([
+      const [nextSummary, nextMerchantWalletBalance, nextWithdrawalStatus] = await Promise.all([
         getMerchantBitGoSummary(smartWalletAddress),
         readTokenBalance(BITGO_MERCHANT_TOKEN.address),
+        getMerchantBitGoWithdrawalStatus({ merchantAddress: smartWalletAddress }),
       ]);
       setSummary(nextSummary);
-      setMerchantTokenBalance(nextBalance);
+      setMerchantWalletBalance(nextMerchantWalletBalance);
+      setWithdrawResult(nextWithdrawalStatus);
+      setActionError(nextWithdrawalStatus?.appStatus === "failed" ? "Withdrawal failed in BitGo dashboard" : null);
     } catch (nextError) {
       setSummary(null);
-      setMerchantTokenBalance(BigInt(0));
-      setError(nextError instanceof Error ? nextError.message : "Failed to load merchant privacy summary");
+      setMerchantWalletBalance(BigInt(0));
+      setWithdrawResult(null);
+      setLoadError(nextError instanceof Error ? nextError.message : "Failed to load merchant privacy summary");
     } finally {
       setIsLoading(false);
     }
@@ -63,36 +81,121 @@ export default function HistoryScreen() {
     loadSummary().catch(() => undefined);
   }, [loadSummary]);
 
+  useEffect(() => {
+    const txRequestId = withdrawResult?.txRequestId;
+    const appStatus = withdrawResult?.appStatus;
+
+    if (!smartWalletAddress || !txRequestId) {
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current);
+        pollTimeoutRef.current = null;
+      }
+      pollingTxRequestIdRef.current = null;
+      return;
+    }
+
+    if (appStatus === "confirmed" || appStatus === "failed") {
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current);
+        pollTimeoutRef.current = null;
+      }
+      pollingTxRequestIdRef.current = null;
+      return;
+    }
+
+    if (pollingTxRequestIdRef.current === txRequestId) {
+      return;
+    }
+
+    pollingTxRequestIdRef.current = txRequestId;
+    let attempts = 0;
+    const maxAttempts = 15;
+    let cancelled = false;
+
+    const runPoll = async () => {
+      try {
+        const status = await getMerchantBitGoWithdrawalStatus({
+          merchantAddress: smartWalletAddress,
+          txRequestId,
+        });
+
+        if (cancelled || !status) {
+          return;
+        }
+
+        setWithdrawResult(status);
+
+        if (status.appStatus === "failed") {
+          setActionError("Withdrawal failed in BitGo dashboard");
+          pollingTxRequestIdRef.current = null;
+          return;
+        }
+
+        await loadSummary();
+
+        if (status.appStatus === "confirmed") {
+          pollingTxRequestIdRef.current = null;
+          return;
+        }
+      } catch {
+        if (cancelled) {
+          return;
+        }
+      }
+
+      attempts += 1;
+      if (!cancelled && attempts < maxAttempts) {
+        pollTimeoutRef.current = setTimeout(() => {
+          runPoll().catch(() => undefined);
+        }, 4000);
+      } else {
+        pollingTxRequestIdRef.current = null;
+      }
+    };
+
+    pollTimeoutRef.current = setTimeout(() => {
+      runPoll().catch(() => undefined);
+    }, 4000);
+
+    return () => {
+      cancelled = true;
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current);
+        pollTimeoutRef.current = null;
+      }
+    };
+  }, [loadSummary, smartWalletAddress, withdrawResult?.appStatus, withdrawResult?.txRequestId]);
+
   const handleRefresh = useCallback(async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     await loadSummary();
   }, [loadSummary]);
 
   const handleWithdraw = useCallback(async () => {
-    if (!smartWalletAddress || BigInt(summary?.unclaimedAmount ?? "0") <= BigInt(0)) {
+    if (!smartWalletAddress || withdrawableAmount <= BigInt(0)) {
       return;
     }
 
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     setIsWithdrawing(true);
-    setError(null);
+    setActionError(null);
     setWithdrawResult(null);
 
     try {
       const result = await withdrawMerchantBitGoFunds({
         merchantAddress: smartWalletAddress,
         destinationAddress: smartWalletAddress,
-        amount: summary?.unclaimedAmount ?? "0",
+        amount: withdrawableAmount.toString(),
       });
 
       setWithdrawResult(result);
       await loadSummary();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Failed to withdraw merchant funds");
+      setActionError(nextError instanceof Error ? nextError.message : "Failed to withdraw merchant funds");
     } finally {
       setIsWithdrawing(false);
     }
-  }, [loadSummary, smartWalletAddress, summary?.unclaimedAmount]);
+  }, [loadSummary, smartWalletAddress, withdrawableAmount]);
 
   const handleCreateCheckout = useCallback(async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
@@ -103,6 +206,28 @@ export default function HistoryScreen() {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     router.push("/pay-merchant-bitgo" as never);
   }, [router]);
+
+  const handleCopyWallet = useCallback(async () => {
+    if (!smartWalletAddress) {
+      return;
+    }
+
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await Clipboard.setStringAsync(smartWalletAddress);
+    setCopiedWallet(true);
+    setTimeout(() => setCopiedWallet(false), 1200);
+  }, [smartWalletAddress]);
+
+  const handleCopyBaseAddress = useCallback(async () => {
+    if (!summary?.walletAddress) {
+      return;
+    }
+
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await Clipboard.setStringAsync(summary.walletAddress);
+    setCopiedBaseAddress(true);
+    setTimeout(() => setCopiedBaseAddress(false), 1200);
+  }, [summary?.walletAddress]);
 
   return (
     <View style={styles.container}>
@@ -116,7 +241,7 @@ export default function HistoryScreen() {
         <View style={styles.balanceShadow}>
           <View style={styles.balanceCard}>
             <View style={styles.balanceHeaderRow}>
-              <Text style={styles.balanceLabel}>BITGO MERCHANT</Text>
+              <Text style={styles.balanceLabel}>BUMP WALLET</Text>
               <Pressable
                 onPress={handleRefresh}
                 style={({ pressed }) => [styles.refreshPill, pressed && styles.buttonPressed]}
@@ -124,53 +249,97 @@ export default function HistoryScreen() {
                 <Text style={styles.refreshPillText}>{isLoading ? "SYNCING" : "REFRESH"}</Text>
               </Pressable>
             </View>
+            <View style={styles.addressRow}>
+              <Text style={styles.addressText}>
+                {smartWalletAddress
+                  ? `${smartWalletAddress.slice(0, 8)}...${smartWalletAddress.slice(-6)}`
+                  : "Wallet unavailable"}
+              </Text>
+              <Pressable
+                onPress={handleCopyWallet}
+                style={({ pressed }) => [styles.copyButton, pressed && styles.buttonPressed]}
+                disabled={!smartWalletAddress}
+              >
+                <Ionicons
+                  name={copiedWallet ? "checkmark" : "copy-outline"}
+                  size={16}
+                  color={COLORS.textPrimary}
+                />
+                <Text style={styles.copyButtonText}>{copiedWallet ? "COPIED" : "COPY"}</Text>
+              </Pressable>
+            </View>
             <Text style={styles.balanceValue}>
-              {formatUnits(merchantTokenBalance, TOKEN_DECIMALS)}{" "}
+              {formatUnits(merchantWalletBalance, TOKEN_DECIMALS)}{" "}
               {BITGO_MERCHANT_TOKEN.symbol}
             </Text>
-            <Text style={styles.balanceSubtext}>Original wallet balance on Base Sepolia</Text>
-            {error ? <Text style={styles.balanceError}>{error}</Text> : null}
+            <Text style={styles.balanceSubtext}>USDC balance on Base Sepolia</Text>
+            {loadError ? <Text style={styles.balanceError}>{loadError}</Text> : null}
           </View>
         </View>
 
         <View style={styles.summaryShadow}>
           <View style={styles.summaryCard}>
             <Text style={styles.summaryLabel}>MERCHANT PRIVACY</Text>
-            <Text style={styles.summaryTitle}>UNCLAIMED FUNDS</Text>
+            <Text style={styles.summaryTitle}>BITGO SUMMARY</Text>
             <Text style={styles.summaryValue}>
-              {formatUnits(BigInt(summary?.unclaimedAmount ?? "0"), TOKEN_DECIMALS)}{" "}
+              {formatUnits(bitgoBalance, TOKEN_DECIMALS)}{" "}
               {BITGO_MERCHANT_TOKEN.symbol}
             </Text>
-            <Text style={styles.summaryText}>
-              Total received: {formatUnits(BigInt(summary?.totalReceived ?? "0"), TOKEN_DECIMALS)}{" "}
-              {BITGO_MERCHANT_TOKEN.symbol}
-            </Text>
-            <Text style={styles.summaryText}>
-              Claimed: {formatUnits(BigInt(summary?.claimedAmount ?? "0"), TOKEN_DECIMALS)}{" "}
-              {BITGO_MERCHANT_TOKEN.symbol}
-            </Text>
-            <Text style={styles.summaryText}>
-              Unclaimed checkout addresses: {summary?.unclaimedCheckoutCount ?? 0}
-            </Text>
-            {summary?.walletAddress ? (
-              <Text style={styles.summaryText}>
-                BitGo wallet: {summary.walletAddress.slice(0, 10)}...{summary.walletAddress.slice(-6)}
+            <View style={styles.metricRow}>
+              <Text style={styles.metricLabel}>BitGo Balance</Text>
+              <Text style={styles.metricValue}>Confirmed by BitGo</Text>
+            </View>
+            <View style={styles.metricRow}>
+              <Text style={styles.metricLabel}>Withdrawable Amount</Text>
+              <Text style={styles.metricValue}>
+                {formatUnits(withdrawableAmount, TOKEN_DECIMALS)}{" "}
+                {BITGO_MERCHANT_TOKEN.symbol}
               </Text>
+            </View>
+            <View style={styles.baseAddressRow}>
+              <View style={styles.baseAddressContent}>
+                <Text style={styles.baseAddressLabel}>BitGo Base Address</Text>
+                <Text style={styles.baseAddressValue}>
+                  {summary?.walletAddress
+                    ? `${summary.walletAddress.slice(0, 8)}...${summary.walletAddress.slice(-6)}`
+                    : "Unavailable"}
+                </Text>
+                <Text style={styles.baseAddressHint}>Receive Address 0</Text>
+              </View>
+              <Pressable
+                onPress={handleCopyBaseAddress}
+                style={({ pressed }) => [styles.copyButton, pressed && styles.buttonPressed]}
+                disabled={!summary?.walletAddress}
+              >
+                <Ionicons
+                  name={copiedBaseAddress ? "checkmark" : "copy-outline"}
+                  size={16}
+                  color={COLORS.textPrimary}
+                />
+                <Text style={styles.copyButtonText}>{copiedBaseAddress ? "COPIED" : "COPY"}</Text>
+              </Pressable>
+            </View>
+            {withdrawResult && withdrawResult.appStatus !== "failed" ? (
+              <Text style={styles.successText}>Withdrawal submitted</Text>
             ) : null}
-            {withdrawResult ? (
-              <Text style={styles.successText}>
-                Withdrawal submitted: {withdrawResult.txid ?? withdrawResult.pendingApproval?.id ?? "pending"}
-              </Text>
-            ) : null}
+            {actionError ? <Text style={styles.summaryError}>{actionError}</Text> : null}
 
             <View style={styles.actionShadow}>
               <Pressable
                 onPress={handleWithdraw}
-                style={[styles.withdrawButton, (isWithdrawing || BigInt(summary?.unclaimedAmount ?? "0") <= BigInt(0)) && styles.disabledButton]}
-                disabled={isWithdrawing || BigInt(summary?.unclaimedAmount ?? "0") <= BigInt(0)}
+                style={[
+                  styles.withdrawButton,
+                  (isWithdrawing || hasPendingWithdrawal || withdrawableAmount <= BigInt(0)) &&
+                    styles.disabledButton,
+                ]}
+                disabled={isWithdrawing || hasPendingWithdrawal || withdrawableAmount <= BigInt(0)}
               >
                 <Text style={styles.withdrawButtonText}>
-                  {isWithdrawing ? "WITHDRAWING..." : "WITHDRAW TO MY WALLET"}
+                  {isWithdrawing
+                    ? "WITHDRAWING..."
+                    : hasPendingWithdrawal
+                      ? "WITHDRAWAL SUBMITTED"
+                      : "WITHDRAW TO MY WALLET"}
                 </Text>
               </Pressable>
             </View>
@@ -281,6 +450,34 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     opacity: 0.75,
   },
+  addressRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  addressText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "800",
+    color: COLORS.textPrimary,
+  },
+  copyButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderWidth: BORDER_THICK.width,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.surface,
+  },
+  copyButtonText: {
+    fontSize: 10,
+    fontWeight: "900",
+    color: COLORS.textPrimary,
+    letterSpacing: 1,
+  },
   balanceError: {
     fontSize: 13,
     fontWeight: "800",
@@ -315,14 +512,70 @@ const styles = StyleSheet.create({
   },
   summaryText: {
     fontSize: 13,
+    fontWeight: "800",
+    color: COLORS.textPrimary,
+    opacity: 0.75,
+  },
+  metricRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 16,
+    paddingVertical: 4,
+  },
+  metricLabel: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "800",
+    color: COLORS.textPrimary,
+  },
+  metricValue: {
+    fontSize: 13,
+    fontWeight: "900",
+    color: COLORS.textPrimary,
+  },
+  baseAddressRow: {
+    marginTop: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    padding: 12,
+    borderWidth: BORDER_THICK.width,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.backgroundLight,
+  },
+  baseAddressContent: {
+    flex: 1,
+    gap: 2,
+  },
+  baseAddressLabel: {
+    fontSize: 12,
+    fontWeight: "900",
+    color: COLORS.textMuted,
+    letterSpacing: 1,
+  },
+  baseAddressValue: {
+    fontSize: 14,
+    fontWeight: "900",
+    color: COLORS.textPrimary,
+  },
+  baseAddressHint: {
+    fontSize: 11,
     fontWeight: "700",
     color: COLORS.textPrimary,
-    lineHeight: 20,
+    opacity: 0.7,
   },
   successText: {
     fontSize: 13,
     fontWeight: "900",
     color: COLORS.success,
+    lineHeight: 20,
+  },
+  summaryError: {
+    fontSize: 13,
+    fontWeight: "900",
+    color: COLORS.error,
     lineHeight: 20,
   },
   actionShadow: {
